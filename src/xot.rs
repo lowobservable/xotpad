@@ -1,4 +1,5 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use regex::{Captures, Regex};
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -124,23 +125,60 @@ fn decode_header(buffer: &mut BytesMut) -> io::Result<Option<(u16, usize)>> {
 }
 
 pub struct XotResolver {
-    xxx: String,
+    routes: Vec<(Regex, XotResolution)>,
+}
+
+pub enum XotResolution {
+    Host(String),
+    Rewrite(String),
 }
 
 impl XotResolver {
-    pub fn new(xxx: String) -> Self {
-        XotResolver { xxx }
+    pub fn new() -> Self {
+        XotResolver { routes: Vec::new() }
+    }
+
+    pub fn add(&mut self, a: &str, resolution: XotResolution) {
+        let a = Regex::new(a).unwrap();
+
+        self.routes.push((a, resolution));
     }
 
     pub fn resolve(&self, address: &X121Address) -> Option<String> {
-        /*
-        if address.to_string() == "737101" {
-            return Some(self.xxx.clone());
+        let address = address.to_string();
+
+        for (regex, resolution) in self.routes.iter() {
+            let captures = regex.captures(&address);
+
+            if captures.is_none() {
+                continue;
+            }
+
+            let xot_gateway = match resolution {
+                XotResolution::Host(address) => address.clone(),
+                XotResolution::Rewrite(template) => {
+                    xot_template_replace(template, captures.unwrap())
+                }
+            };
+
+            println!("Lookup {}, found {}!", address, xot_gateway);
+
+            return Some(xot_gateway);
         }
 
         None
-        */
-
-        Some(self.xxx.clone())
     }
+}
+
+fn xot_template_replace(template: &str, captures: Captures) -> String {
+    let mut address = template.to_string();
+
+    for index in 1..captures.len() {
+        let pattern = "\\".to_owned() + &index.to_string();
+        let replacement = captures.get(index).unwrap().as_str();
+
+        address = address.replace(&pattern, replacement);
+    }
+
+    address
 }

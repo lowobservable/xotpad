@@ -13,7 +13,7 @@ use xotpad::pad::{HostPad, UserPad};
 use xotpad::x121::X121Address;
 use xotpad::x25::{X25CallRequest, X25LogicalChannel, X25Modulo};
 use xotpad::xot;
-use xotpad::xot::{XotCodec, XotResolver};
+use xotpad::xot::{XotCodec, XotResolution, XotResolver};
 
 struct ListenTable {
     xxx: Vec<(Regex, String)>,
@@ -160,11 +160,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|gateway| gateway.to_string())
             .or_else(|| env::var("XOT_GATEWAY").ok());
 
-        if xot_gateway.is_none() {
-            todo!();
-        }
+        let mut xot_resolver = XotResolver::new();
 
-        let xot_resolver = XotResolver::new(xot_gateway.unwrap());
+        if let Some(xot_gateway) = xot_gateway {
+            xot_resolver.add("", XotResolution::Host(xot_gateway));
+        } else {
+            // TODO...
+            xot_resolver.add("^737202..$", XotResolution::Host("127.0.0.1".into()));
+            xot_resolver.add("^737.....$", XotResolution::Host("pac1".into()));
+            xot_resolver.add(
+                "^(...)(...)..$",
+                XotResolution::Rewrite(r"\2.\1.x25.org".into()),
+            );
+        }
 
         let call_address = matches
             .value_of("call_address")
