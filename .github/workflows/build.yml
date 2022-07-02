@@ -1,0 +1,18 @@
+name: Build
+
+on: push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build
+    steps:
+      - uses: actions/checkout@v2
+      - name: Build
+        run: cargo build --verbose
+      - name: Run unit tests
+        run: cargo test --verbose
+      - name: Run format check
+        run: cargo fmt --check
+      - name: Run linter
+        run: cargo clippy
