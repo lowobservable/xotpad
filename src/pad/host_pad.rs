@@ -10,7 +10,7 @@ pub struct HostPad<R, W> {
     writer: BufWriter<W>,
     channel: X25LogicalChannel,
     data: BytesMut,
-    xxx_shutting_down: bool,
+    is_running: bool,
 }
 
 impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> HostPad<R, W> {
@@ -27,24 +27,26 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
             writer: BufWriter::new(writer),
             channel,
             data: BytesMut::new(),
-            xxx_shutting_down: false,
+            is_running: false,
         }
     }
 
     pub async fn run(mut self) -> io::Result<()> {
+        self.is_running = true;
+
         let mut buffer: [u8; 1024] = [0; 1024];
 
-        loop {
+        while self.is_running {
             select! {
                 length = self.reader.read(&mut buffer) => {
                     match length {
-                        Ok(length) => self.handle_host_output(&buffer[0..length]).await?,
-                        Err(error) => {
-                            println!("okay, so I think the process quit {:?}", error);
-
+                        Ok(length) => {
+                            self.handle_host_output(&buffer[0..length]).await?
+                        }
+                        Err(_) => {
                             self.channel.clear_call(0).await?; // TODO: cause?
 
-                            break;
+                            self.is_running = false;
                         },
                     }
                 },
@@ -59,14 +61,7 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
                     }
                 },
             }
-
-            // XXX: this is here, because shutdown would be signaled above!
-            if self.xxx_shutting_down {
-                break;
-            }
         }
-
-        println!("I AM DOWN HERE NOW!");
 
         Ok(())
     }
@@ -82,10 +77,10 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
                 self.writer.flush().await?;
             }
             X25Packet::ClearRequest(_) => {
-                self.xxx_shutting_down = true;
+                self.is_running = false;
             }
             X25Packet::ClearConfirmation(_) => {
-                self.xxx_shutting_down = true;
+                self.is_running = false;
             }
             _ => { /* TODO: most packets have to be ignored, for now */ }
         }

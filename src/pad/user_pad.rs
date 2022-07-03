@@ -49,44 +49,6 @@ enum UserPadState {
     Shutdown,
 }
 
-async fn xxx_wait_for_call(
-    listener: &mut Option<TcpListener>,
-    enable: bool,
-) -> io::Result<(X25LogicalChannel, X25CallRequest)> {
-    if listener.is_none() || !enable {
-        return futures::future::pending().await;
-    }
-
-    //print!("\r\nokay, I am waiting for a call...\r\n");
-
-    let (tcp_stream, address) = listener.as_ref().unwrap().accept().await?;
-
-    //println!("got a connection from {:?}", address);
-
-    let xot_framed = Framed::new(tcp_stream, XotCodec::new());
-
-    let mut channel = X25LogicalChannel::new(xot_framed, X25Modulo::Normal);
-
-    //println!("waiting for a call request...");
-
-    let call_request = channel.wait_for_call().await?;
-
-    Ok((channel, call_request))
-}
-
-async fn xxx_read_packet(
-    channel: Option<&mut X25LogicalChannel>,
-    enable: bool,
-) -> Option<io::Result<X25Packet>> {
-    // TODO: would it be better to run select on a list that ONLY contains
-    // the sources we are interested in - instead of this "dummy" future?
-    if channel.is_none() || !enable {
-        return futures::future::pending().await;
-    }
-
-    channel.unwrap().xxx_next().await
-}
-
 impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> UserPad<'a, R, W> {
     pub fn new(
         reader: R,
@@ -158,7 +120,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
         self.data.clear();
 
-        self.switch_to_command_mode().await
+        Ok(())
     }
 
     pub async fn run(mut self) -> io::Result<()> {
@@ -168,7 +130,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
             self.writer.flush().await?;
         }
 
-        loop {
+        while self.state != UserPadState::Shutdown {
             let is_in_data_state = self.state == UserPadState::Data;
 
             select! {
@@ -179,7 +141,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
                     }
                 },
 
-                packet = xxx_read_packet(self.channel.as_mut(), is_in_data_state) => {
+                packet = read_packet(self.channel.as_mut(), is_in_data_state) => {
                     match packet {
                         Some(Ok(packet)) => self.handle_packet(packet).await?,
                         Some(Err(error)) => panic!("{}", error),
@@ -197,7 +159,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
                 // TODO: really, this needs to go in a separate thread so it
                 // does not block while we are trying to accept the call...
-                call_request = xxx_wait_for_call(&mut self.listener, true) => {
+                call_request = wait_for_call(&mut self.listener, true) => {
                     match call_request {
                         Ok((channel, call_request)) => self.handle_incoming_call(channel, call_request).await?,
                         Err(error) => panic!("{}", error),
@@ -205,14 +167,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
                 },
             }
 
-            //print!(".\r\n");
-
             self.writer.flush().await?;
-
-            // XXX: this is here, because shutdown would be signaled above!
-            if self.state == UserPadState::Shutdown {
-                break;
-            }
         }
 
         Ok(())
@@ -311,12 +266,10 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         mut channel: X25LogicalChannel,
         call_request: X25CallRequest,
     ) -> io::Result<()> {
-        //print!("\r\nCCC - START: handle_incoming_call\r\n");
-
         let called_address = call_request.called_address.to_string();
 
         if self.channel.is_some() {
-            let cause = 0b0000_0001; // "OCC" - number busy
+            let cause = 1; // "OCC" - number busy
 
             channel.clear_call(cause).await?;
         } else if called_address.starts_with(&self.address.to_string()) {
@@ -327,12 +280,10 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
             self.channel = Some(channel);
             self.switch_to_data_mode()?;
         } else {
-            let cause = 0b0000_0001; // TODO - what should this be?
+            let cause = 0; // TODO: what should this be?
 
             channel.clear_call(cause).await?;
         }
-
-        //print!("\r\nCCC - STOP:  handle_incoming_call\r\n");
 
         Ok(())
     }
@@ -409,11 +360,11 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
     async fn queue_and_maybe_send_data(&mut self, byte: u8) -> io::Result<()> {
         self.data.put_u8(byte);
 
-        // Do we send it?
-        if is_data_ready_to_send(&self.data) {
+        // TODO
+        if true {
             let data = self.data.clone().freeze();
 
-            self.channel.as_mut().unwrap().send_data(data).await?; // <- no UNWRAP!
+            self.channel.as_mut().unwrap().send_data(data).await?;
 
             self.data.clear();
         }
@@ -422,8 +373,36 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
     }
 }
 
-fn is_data_ready_to_send(buffer: &BytesMut) -> bool {
-    true
+async fn wait_for_call(
+    listener: &mut Option<TcpListener>,
+    enable: bool,
+) -> io::Result<(X25LogicalChannel, X25CallRequest)> {
+    if listener.is_none() || !enable {
+        return futures::future::pending().await;
+    }
+
+    let (tcp_stream, _address) = listener.as_ref().unwrap().accept().await?;
+
+    let xot_framed = Framed::new(tcp_stream, XotCodec::new());
+
+    let mut channel = X25LogicalChannel::new(xot_framed, X25Modulo::Normal);
+
+    let call_request = channel.wait_for_call().await?;
+
+    Ok((channel, call_request))
+}
+
+async fn read_packet(
+    channel: Option<&mut X25LogicalChannel>,
+    enable: bool,
+) -> Option<io::Result<X25Packet>> {
+    // TODO: would it be better to run select on a list that ONLY contains
+    // the sources we are interested in - instead of this "dummy" future?
+    if channel.is_none() || !enable {
+        return futures::future::pending().await;
+    }
+
+    channel.unwrap().xxx_next().await
 }
 
 // ...

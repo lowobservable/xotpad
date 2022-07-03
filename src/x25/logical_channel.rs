@@ -360,8 +360,6 @@ impl X25LogicalChannel {
                     self.state = X25LogicalChannelState::Ready;
                 }
                 X25Packet::ResetRequest(_) => {
-                    print!("\r\nGOT RESET REQUEST\r\n");
-
                     if let Err(e) = self.reset_confirmation().await {
                         return Some(Err(e));
                     }
@@ -380,8 +378,6 @@ impl X25LogicalChannel {
         } else if self.state == X25LogicalChannelState::AwaitingResetConfirmation {
             match packet {
                 X25Packet::ResetRequest(_) => {
-                    print!("\r\nGOT RESET REQUEST\r\n");
-
                     if let Err(e) = self.reset_confirmation().await {
                         return Some(Err(e));
                     }
@@ -399,8 +395,6 @@ impl X25LogicalChannel {
                 }
 
                 X25Packet::ResetConfirmation(_) => {
-                    print!("\r\nGOT RESET CONFIRMATION\r\n");
-
                     // TODO: move this to a function...
                     self.receive_sequence = 0;
                     self.send_sequence = 0;

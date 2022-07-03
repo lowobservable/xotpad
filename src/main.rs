@@ -15,38 +15,6 @@ use xotpad::x25::{X25CallRequest, X25LogicalChannel, X25Modulo};
 use xotpad::xot;
 use xotpad::xot::{XotCodec, XotResolution, XotResolver};
 
-struct ListenTable {
-    xxx: Vec<(Regex, String)>,
-}
-
-impl ListenTable {
-    fn new() -> Self {
-        ListenTable { xxx: Vec::new() }
-    }
-
-    fn register(&mut self, a: &str, b: String) -> Result<(), String> {
-        let a = Regex::new(a).unwrap();
-
-        self.xxx.push((a, b));
-
-        Ok(())
-    }
-
-    fn lookup(&self, call_request: &X25CallRequest) -> Option<String> {
-        let called_address = call_request.called_address.to_string();
-
-        for (a, b) in self.xxx.iter() {
-            if !a.is_match(&called_address) {
-                continue;
-            }
-
-            return Some(b.clone());
-        }
-
-        None
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = ClapCommand::new("xotpad")
@@ -214,4 +182,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+struct ListenTable {
+    xxx: Vec<(Regex, String)>,
+}
+
+impl ListenTable {
+    fn new() -> Self {
+        ListenTable { xxx: Vec::new() }
+    }
+
+    fn register(&mut self, a: &str, b: String) -> Result<(), String> {
+        let a = Regex::new(a).unwrap();
+
+        self.xxx.push((a, b));
+
+        Ok(())
+    }
+
+    fn lookup(&self, call_request: &X25CallRequest) -> Option<String> {
+        let called_address = call_request.called_address.to_string();
+
+        for (a, b) in self.xxx.iter() {
+            if !a.is_match(&called_address) {
+                continue;
+            }
+
+            return Some(b.clone());
+        }
+
+        None
+    }
 }
