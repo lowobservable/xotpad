@@ -388,9 +388,7 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
             let gfi = 0b0000;
 
             // TODO: more_data
-            let type_ = 0b0000_0000
-                | ((data.receive_sequence as u8) << 5)
-                | ((data.send_sequence as u8) << 1);
+            let type_ = ((data.receive_sequence as u8) << 5) | ((data.send_sequence as u8) << 1);
 
             put_packet_header(&mut buffer, data.modulo, gfi, data.channel, type_);
 

@@ -13,7 +13,7 @@ use xotpad::pad::{HostPad, UserPad};
 use xotpad::x121::X121Address;
 use xotpad::x25::{X25CallRequest, X25LogicalChannel, X25Modulo};
 use xotpad::xot;
-use xotpad::xot::{XotCodec, XotResolution, XotResolver};
+use xotpad::xot::{XotCodec, XotResolver};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,8 +63,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT)).await?;
 
-        println!("listening...");
-
         loop {
             let (tcp_stream, tcp_address) = listener.accept().await?;
 
@@ -79,7 +77,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let command = listen_table.lookup(&call_request);
 
             if command.is_none() {
-                println!("not something we are listening for I think");
                 channel.clear_call(0).await?;
                 continue;
             }
@@ -131,15 +128,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut xot_resolver = XotResolver::new();
 
         if let Some(xot_gateway) = xot_gateway {
-            xot_resolver.add("", XotResolution::Host(xot_gateway));
+            xot_resolver.add("", xot_gateway);
         } else {
             // TODO...
-            xot_resolver.add("^737202..$", XotResolution::Host("127.0.0.1".into()));
-            xot_resolver.add("^737.....$", XotResolution::Host("pac1".into()));
-            xot_resolver.add(
-                "^(...)(...)..$",
-                XotResolution::Rewrite(r"\2.\1.x25.org".into()),
-            );
+            xot_resolver.add("^737202..$", "127.0.0.1".into());
+            xot_resolver.add("^737.....$", "pac1".into());
+            xot_resolver.add("^(...)(...)..$", r"\2.\1.x25.org".into());
         }
 
         let call_address = matches
@@ -185,18 +179,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 struct ListenTable {
-    xxx: Vec<(Regex, String)>,
+    targets: Vec<(Regex, String)>,
 }
 
 impl ListenTable {
     fn new() -> Self {
-        ListenTable { xxx: Vec::new() }
+        Self {
+            targets: Vec::new(),
+        }
     }
 
-    fn register(&mut self, a: &str, b: String) -> Result<(), String> {
-        let a = Regex::new(a).unwrap();
+    fn register(&mut self, called_address: &str, command: String) -> Result<(), String> {
+        let called_address = Regex::new(called_address).unwrap();
 
-        self.xxx.push((a, b));
+        self.targets.push((called_address, command));
 
         Ok(())
     }
@@ -204,14 +200,20 @@ impl ListenTable {
     fn lookup(&self, call_request: &X25CallRequest) -> Option<String> {
         let called_address = call_request.called_address.to_string();
 
-        for (a, b) in self.xxx.iter() {
-            if !a.is_match(&called_address) {
+        for (called_address_expression, command) in self.targets.iter() {
+            if !called_address_expression.is_match(&called_address) {
                 continue;
             }
 
-            return Some(b.clone());
+            return Some(command.clone());
         }
 
         None
+    }
+}
+
+impl Default for ListenTable {
+    fn default() -> Self {
+        ListenTable::new()
     }
 }

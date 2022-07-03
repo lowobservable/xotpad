@@ -27,6 +27,12 @@ impl XotCodec {
     }
 }
 
+impl Default for XotCodec {
+    fn default() -> Self {
+        XotCodec::new()
+    }
+}
+
 impl Encoder<Bytes> for XotCodec {
     type Error = io::Error;
 
@@ -125,48 +131,42 @@ fn decode_header(buffer: &mut BytesMut) -> io::Result<Option<(u16, usize)>> {
 }
 
 pub struct XotResolver {
-    routes: Vec<(Regex, XotResolution)>,
-}
-
-pub enum XotResolution {
-    Host(String),
-    Rewrite(String),
+    routes: Vec<(Regex, String)>,
 }
 
 impl XotResolver {
     pub fn new() -> Self {
-        XotResolver { routes: Vec::new() }
+        Self { routes: Vec::new() }
     }
 
-    pub fn add(&mut self, a: &str, resolution: XotResolution) {
-        let a = Regex::new(a).unwrap();
+    pub fn add(&mut self, address: &str, gateway: String) {
+        let regex = Regex::new(address).unwrap();
 
-        self.routes.push((a, resolution));
+        self.routes.push((regex, gateway));
     }
 
     pub fn resolve(&self, address: &X121Address) -> Option<String> {
         let address = address.to_string();
 
-        for (regex, resolution) in self.routes.iter() {
+        for (regex, gateway_template) in self.routes.iter() {
             let captures = regex.captures(&address);
 
             if captures.is_none() {
                 continue;
             }
 
-            let xot_gateway = match resolution {
-                XotResolution::Host(address) => address.clone(),
-                XotResolution::Rewrite(template) => {
-                    xot_template_replace(template, captures.unwrap())
-                }
-            };
+            let gateway = xot_template_replace(gateway_template, captures.unwrap());
 
-            println!("Lookup {}, found {}!", address, xot_gateway);
-
-            return Some(xot_gateway);
+            return Some(gateway);
         }
 
         None
+    }
+}
+
+impl Default for XotResolver {
+    fn default() -> Self {
+        XotResolver::new()
     }
 }
 

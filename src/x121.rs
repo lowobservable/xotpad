@@ -32,9 +32,13 @@ impl X121Address {
         self.address.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Returns `true` if this address has no digits, and `false` otherwise.
     pub fn is_null(&self) -> bool {
-        self.len() == 0
+        self.is_empty()
     }
 
     /// Returns an iterator over the address digits.

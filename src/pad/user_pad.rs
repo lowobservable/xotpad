@@ -381,7 +381,7 @@ async fn wait_for_call(
         return futures::future::pending().await;
     }
 
-    let (tcp_stream, _address) = listener.as_ref().unwrap().accept().await?;
+    let (tcp_stream, _tcp_address) = listener.as_ref().unwrap().accept().await?;
 
     let xot_framed = Framed::new(tcp_stream, XotCodec::new());
 
