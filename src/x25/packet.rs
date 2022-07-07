@@ -175,18 +175,14 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
     let modulo = match gfi & 0x03 {
         0b01 => X25Modulo::Normal,
         0b10 => X25Modulo::Extended,
-        _ => return Err("TODO".into()),
+        _ => return Err("Invalid general format identifier".into()),
     };
-
-    if modulo != X25Modulo::Normal {
-        return Err("TODO".into());
-    }
 
     let channel = (((gfi_group & 0x0f) << 4) as u16) | (buffer.get_u8() as u16);
 
     let type_ = buffer.get_u8();
 
-    if type_ & 0x01 == 0 {
+    if type_ & 0x01 == 0x00 {
         let qualifier = (gfi & 0x80) >> 7 == 1;
         let delivery_confirmation = (gfi & 0x40) >> 6 == 1;
 
@@ -204,7 +200,7 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
             send_sequence,
             buffer,
         }))
-    } else if type_ == 0b0000_1011 {
+    } else if type_ == 0x0b {
         if gfi != 0b0001 {
             return Err("Invalid general format identifier".into());
         }
@@ -237,10 +233,10 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
             facilities,
             call_user_data,
         }))
-    } else if type_ == 0b0000_1111 {
+    } else if type_ == 0x0f {
         // TODO: additional optional address fields
         Ok(X25Packet::CallAccepted(X25CallAccepted { modulo, channel }))
-    } else if type_ == 0b0001_0011 {
+    } else if type_ == 0x13 {
         // TODO: check length again
         let cause = buffer.get_u8();
 
@@ -257,13 +253,17 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
             cause,
             diagnostic_code,
         }))
-    } else if type_ == 0b0001_0111 {
+    } else if type_ == 0x17 {
         // TODO: additional optional address fields
         Ok(X25Packet::ClearConfirmation(X25ClearConfirmation {
             modulo,
             channel,
         }))
-    } else if type_ & 0x1f == 0b0000_0001 {
+    } else if type_ & 0x1f == 0x01 {
+        if modulo != X25Modulo::Normal && (type_ & 0xe0) != 0 {
+            return Err("Unidentifiable packet".into());
+        }
+
         let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
 
         Ok(X25Packet::ReceiveReady(X25ReceiveReady {
@@ -271,7 +271,11 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
             channel,
             receive_sequence,
         }))
-    } else if type_ & 0x1f == 0b0000_0101 {
+    } else if type_ & 0x1f == 0x05 {
+        if modulo != X25Modulo::Normal && (type_ & 0xe0) != 0 {
+            return Err("Unidentifiable packet".into());
+        }
+
         let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
 
         Ok(X25Packet::ReceiveNotReady(X25ReceiveNotReady {
@@ -279,7 +283,7 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
             channel,
             receive_sequence,
         }))
-    } else if type_ == 0b0001_1011 {
+    } else if type_ == 0x1b {
         // TODO: check length again
         let cause = buffer.get_u8();
 
@@ -295,14 +299,14 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
             cause,
             diagnostic_code,
         }))
-    } else if type_ == 0b0001_1111 {
+    } else if type_ == 0x1f {
         // TODO: check length again... this has no additional fields!
 
         Ok(X25Packet::ResetConfirmation(X25ResetConfirmation {
             modulo,
             channel,
         }))
-    } else if type_ == 0b1111_0001 {
+    } else if type_ == 0xf1 {
         if channel != 0 {
             // TODO: expected channel to be zero for diagnostic
         }
@@ -329,8 +333,9 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
                 call_request.modulo,
                 0,
                 call_request.channel,
-                0b0000_1011,
+                0x0b,
             );
+
             put_address_block(
                 &mut buffer,
                 &call_request.called_address,
@@ -353,7 +358,7 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
                 call_accepted.modulo,
                 0,
                 call_accepted.channel,
-                0b0000_1111,
+                0x0f,
             );
         }
 
@@ -363,7 +368,7 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
                 clear_request.modulo,
                 0,
                 clear_request.channel,
-                0b0001_0011,
+                0x13,
             );
 
             buffer.put_u8(clear_request.cause);
@@ -379,7 +384,7 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
                 clear_confirmation.modulo,
                 0,
                 clear_confirmation.channel,
-                0b0001_0111,
+                0x17,
             );
         }
 
@@ -396,7 +401,7 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
         }
 
         X25Packet::ReceiveReady(receive_ready) => {
-            let type_ = ((receive_ready.receive_sequence as u8) << 5) | 0b0000_0001;
+            let type_ = ((receive_ready.receive_sequence as u8) << 5) | 0x01;
 
             put_packet_header(
                 &mut buffer,
@@ -408,7 +413,7 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
         }
 
         X25Packet::ReceiveNotReady(receive_not_ready) => {
-            let type_ = ((receive_not_ready.receive_sequence as u8) << 5) | 0b0000_0101;
+            let type_ = ((receive_not_ready.receive_sequence as u8) << 5) | 0x05;
 
             put_packet_header(
                 &mut buffer,
@@ -425,7 +430,7 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
                 reset_request.modulo,
                 0,
                 reset_request.channel,
-                0b0001_1011,
+                0x1b,
             );
 
             buffer.put_u8(reset_request.cause);
@@ -441,12 +446,12 @@ pub fn format_packet(packet: &X25Packet) -> Bytes {
                 reset_confirmation.modulo,
                 0,
                 reset_confirmation.channel,
-                0b0001_1111,
+                0x1f,
             );
         }
 
         X25Packet::Diagnostic(diagnostic) => {
-            put_packet_header(&mut buffer, diagnostic.modulo, 0, 0, 0b1111_0001);
+            put_packet_header(&mut buffer, diagnostic.modulo, 0, 0, 0xf1);
 
             buffer.put_u8(diagnostic.code);
         }
