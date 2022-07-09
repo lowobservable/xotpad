@@ -1,5 +1,6 @@
-use crate::x121::X121Address;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+
+use crate::x121::X121Address;
 
 pub const MIN_PACKET_LENGTH: usize = 3;
 
@@ -51,86 +52,6 @@ pub enum X25Modulo {
     Extended = 128,
 }
 
-#[derive(Debug)]
-pub struct X25CallRequest {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-    pub called_address: X121Address,
-    pub calling_address: X121Address,
-    pub facilities: Option<Bytes>,
-    pub call_user_data: Option<Bytes>,
-}
-
-#[derive(Debug)]
-pub struct X25CallAccepted {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-    // TODO: called_address, calling_address etc.
-}
-
-#[derive(Debug)]
-pub struct X25ClearRequest {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-    pub cause: u8,
-    pub diagnostic_code: Option<u8>,
-    // TODO: called_address, calling_address etc.
-}
-
-#[derive(Debug)]
-pub struct X25ClearConfirmation {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-    // TODO: optional called address calling address etc.
-}
-
-#[derive(Debug)]
-pub struct X25Data {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-    pub qualifier: bool,
-    pub delivery_confirmation: bool,
-    pub more_data: bool,
-    pub receive_sequence: u16,
-    pub send_sequence: u16,
-    pub buffer: Bytes,
-}
-
-#[derive(Debug)]
-pub struct X25ReceiveReady {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-    pub receive_sequence: u16,
-}
-
-#[derive(Debug)]
-pub struct X25ReceiveNotReady {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-    pub receive_sequence: u16,
-}
-
-#[derive(Debug)]
-pub struct X25ResetRequest {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-    pub cause: u8,
-    pub diagnostic_code: Option<u8>,
-}
-
-#[derive(Debug)]
-pub struct X25ResetConfirmation {
-    pub modulo: X25Modulo,
-    pub channel: u16,
-}
-
-#[derive(Debug)]
-pub struct X25Diagnostic {
-    pub modulo: X25Modulo,
-    pub code: u8,
-    // TODO: diagnostic explanation
-}
-
 impl X25Packet {
     pub fn modulo(&self) -> X25Modulo {
         match self {
@@ -163,48 +84,18 @@ impl X25Packet {
     }
 }
 
-pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
-    if buffer.remaining() < MIN_PACKET_LENGTH {
-        return Err("Packet too short".into());
-    }
+#[derive(Debug)]
+pub struct X25CallRequest {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub called_address: X121Address,
+    pub calling_address: X121Address,
+    pub facilities: Option<Bytes>,
+    pub call_user_data: Option<Bytes>,
+}
 
-    let gfi_group = buffer.get_u8();
-
-    let gfi = (gfi_group & 0xf0) >> 4;
-
-    let modulo = match gfi & 0x03 {
-        0b01 => X25Modulo::Normal,
-        0b10 => X25Modulo::Extended,
-        _ => return Err("Invalid general format identifier".into()),
-    };
-
-    let channel = (((gfi_group & 0x0f) << 4) as u16) | (buffer.get_u8() as u16);
-
-    let type_ = buffer.get_u8();
-
-    if type_ & 0x01 == 0x00 {
-        let qualifier = (gfi & 0x80) >> 7 == 1;
-        let delivery_confirmation = (gfi & 0x40) >> 6 == 1;
-
-        let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
-        let more_data = (type_ & 0x10) >> 4 == 1;
-        let send_sequence = ((type_ & 0x0e) >> 1) as u16;
-
-        Ok(X25Packet::Data(X25Data {
-            modulo,
-            channel,
-            qualifier,
-            delivery_confirmation,
-            more_data,
-            receive_sequence,
-            send_sequence,
-            buffer,
-        }))
-    } else if type_ == 0x0b {
-        if gfi != 0b0001 {
-            return Err("Invalid general format identifier".into());
-        }
-
+impl X25CallRequest {
+    fn parse(mut buffer: Bytes, modulo: X25Modulo, channel: u16) -> Result<X25CallRequest, String> {
         let (called_address, calling_address) = parse_address_block(&mut buffer)?;
 
         let facilities = if buffer.has_remaining() {
@@ -225,19 +116,77 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
             None
         };
 
-        Ok(X25Packet::CallRequest(X25CallRequest {
+        Ok(X25CallRequest {
             modulo,
             channel,
             called_address,
             calling_address,
             facilities,
             call_user_data,
-        }))
-    } else if type_ == 0x0f {
+        })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(32);
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x0b);
+
+        put_address_block(&mut buffer, &self.called_address, &self.calling_address);
+
+        if let Some(facilities) = &self.facilities {
+            buffer.put_u8(facilities.len() as u8);
+            buffer.put_slice(facilities);
+        }
+
+        if let Some(call_user_data) = &self.call_user_data {
+            buffer.put_slice(call_user_data);
+        }
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25CallAccepted {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    // TODO: called_address, calling_address etc.
+}
+
+impl X25CallAccepted {
+    fn parse(buffer: Bytes, modulo: X25Modulo, channel: u16) -> Result<X25CallAccepted, String> {
         // TODO: additional optional address fields
-        Ok(X25Packet::CallAccepted(X25CallAccepted { modulo, channel }))
-    } else if type_ == 0x13 {
-        // TODO: check length again
+        Ok(X25CallAccepted { modulo, channel })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(3);
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x0f);
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25ClearRequest {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub cause: u8,
+    pub diagnostic_code: Option<u8>,
+    // TODO: called_address, calling_address etc.
+}
+
+impl X25ClearRequest {
+    fn parse(
+        mut buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+    ) -> Result<X25ClearRequest, String> {
+        if buffer.remaining() < 1 {
+            return Err("Packet too short".into());
+        }
+
         let cause = buffer.get_u8();
 
         let diagnostic_code = if buffer.has_remaining() {
@@ -247,44 +196,205 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
         };
 
         // TODO: additional optional address fields
-        Ok(X25Packet::ClearRequest(X25ClearRequest {
+        Ok(X25ClearRequest {
             modulo,
             channel,
             cause,
             diagnostic_code,
-        }))
-    } else if type_ == 0x17 {
+        })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(5);
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x13);
+
+        buffer.put_u8(self.cause);
+
+        if let Some(diagnostic_code) = self.diagnostic_code {
+            buffer.put_u8(diagnostic_code);
+        }
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25ClearConfirmation {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    // TODO: optional called address calling address etc.
+}
+
+impl X25ClearConfirmation {
+    fn parse(
+        buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+    ) -> Result<X25ClearConfirmation, String> {
         // TODO: additional optional address fields
-        Ok(X25Packet::ClearConfirmation(X25ClearConfirmation {
+        Ok(X25ClearConfirmation { modulo, channel })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(3);
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x17);
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25Data {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub qualifier: bool,
+    pub delivery_confirmation: bool,
+    pub more_data: bool,
+    pub receive_sequence: u16,
+    pub send_sequence: u16,
+    pub buffer: Bytes,
+}
+
+impl X25Data {
+    fn parse(
+        buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        gfi: u8,
+        type_: u8,
+    ) -> Result<X25Data, String> {
+        let qualifier = (gfi & 0x80) >> 7 == 1;
+        let delivery_confirmation = (gfi & 0x40) >> 6 == 1;
+
+        let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
+        let more_data = (type_ & 0x10) >> 4 == 1;
+        let send_sequence = ((type_ & 0x0e) >> 1) as u16;
+
+        Ok(X25Data {
             modulo,
             channel,
-        }))
-    } else if type_ & 0x1f == 0x01 {
+            qualifier,
+            delivery_confirmation,
+            more_data,
+            receive_sequence,
+            send_sequence,
+            buffer,
+        })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(32);
+
+        // TODO: qualifier, delivery_confirmatio)n
+        let gfi = 0b0000;
+
+        // TODO: more_data
+        let type_ = ((self.receive_sequence as u8) << 5) | ((self.send_sequence as u8) << 1);
+
+        put_packet_header(&mut buffer, self.modulo, gfi, self.channel, type_);
+
+        buffer.put_slice(&self.buffer);
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25ReceiveReady {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub receive_sequence: u16,
+}
+
+impl X25ReceiveReady {
+    fn parse(
+        buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        type_: u8,
+    ) -> Result<X25ReceiveReady, String> {
         if modulo != X25Modulo::Normal && (type_ & 0xe0) != 0 {
             return Err("Unidentifiable packet".into());
         }
 
         let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
 
-        Ok(X25Packet::ReceiveReady(X25ReceiveReady {
+        Ok(X25ReceiveReady {
             modulo,
             channel,
             receive_sequence,
-        }))
-    } else if type_ & 0x1f == 0x05 {
+        })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(3);
+
+        let type_ = ((self.receive_sequence as u8) << 5) | 0x01;
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, type_);
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25ReceiveNotReady {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub receive_sequence: u16,
+}
+
+impl X25ReceiveNotReady {
+    fn parse(
+        buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        type_: u8,
+    ) -> Result<X25ReceiveNotReady, String> {
         if modulo != X25Modulo::Normal && (type_ & 0xe0) != 0 {
             return Err("Unidentifiable packet".into());
         }
 
         let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
 
-        Ok(X25Packet::ReceiveNotReady(X25ReceiveNotReady {
+        Ok(X25ReceiveNotReady {
             modulo,
             channel,
             receive_sequence,
-        }))
-    } else if type_ == 0x1b {
-        // TODO: check length again
+        })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(3);
+
+        let type_ = ((self.receive_sequence as u8) << 5) | 0x05;
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, type_);
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25ResetRequest {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub cause: u8,
+    pub diagnostic_code: Option<u8>,
+}
+
+impl X25ResetRequest {
+    fn parse(
+        mut buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+    ) -> Result<X25ResetRequest, String> {
+        if buffer.remaining() < 1 {
+            return Err("Packet too short".into());
+        }
+
         let cause = buffer.get_u8();
 
         let diagnostic_code = if buffer.has_remaining() {
@@ -293,29 +403,149 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
             None
         };
 
-        Ok(X25Packet::ResetRequest(X25ResetRequest {
+        Ok(X25ResetRequest {
             modulo,
             channel,
             cause,
             diagnostic_code,
-        }))
-    } else if type_ == 0x1f {
+        })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(5);
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x1b);
+
+        buffer.put_u8(self.cause);
+
+        if let Some(diagnostic_code) = self.diagnostic_code {
+            buffer.put_u8(diagnostic_code);
+        }
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25ResetConfirmation {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+}
+
+impl X25ResetConfirmation {
+    fn parse(
+        buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+    ) -> Result<X25ResetConfirmation, String> {
         // TODO: check length again... this has no additional fields!
 
-        Ok(X25Packet::ResetConfirmation(X25ResetConfirmation {
-            modulo,
-            channel,
-        }))
-    } else if type_ == 0xf1 {
+        Ok(X25ResetConfirmation { modulo, channel })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(3);
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x1f);
+
+        Ok(buffer.freeze())
+    }
+}
+
+#[derive(Debug)]
+pub struct X25Diagnostic {
+    pub modulo: X25Modulo,
+    pub code: u8,
+    // TODO: diagnostic explanation
+}
+
+impl X25Diagnostic {
+    fn parse(mut buffer: Bytes, modulo: X25Modulo, channel: u16) -> Result<X25Diagnostic, String> {
         if channel != 0 {
             // TODO: expected channel to be zero for diagnostic
         }
 
-        // TODO: check length
+        if buffer.remaining() < 1 {
+            return Err("Packet too short".into());
+        }
 
         let code = buffer.get_u8();
 
-        Ok(X25Packet::Diagnostic(X25Diagnostic { modulo, code }))
+        Ok(X25Diagnostic { modulo, code })
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(4);
+
+        put_packet_header(&mut buffer, self.modulo, 0, 0, 0x1f);
+
+        buffer.put_u8(self.code);
+
+        Ok(buffer.freeze())
+    }
+}
+
+pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
+    if buffer.remaining() < MIN_PACKET_LENGTH {
+        return Err("Packet too short".into());
+    }
+
+    let header = &buffer[..3];
+
+    let gfi = (header[0] & 0xf0) >> 4;
+
+    let modulo = match gfi & 0x03 {
+        0b01 => X25Modulo::Normal,
+        0b10 => X25Modulo::Extended,
+        _ => return Err("Invalid general format identifier".into()),
+    };
+
+    let channel = (((header[0] & 0x0f) << 4) as u16) | (header[1] as u16);
+
+    let type_ = header[2];
+
+    buffer.advance(3);
+
+    if type_ & 0x01 == 0x00 {
+        let data = X25Data::parse(buffer, modulo, channel, gfi, type_)?;
+
+        Ok(X25Packet::Data(data))
+    } else if type_ == 0x0b {
+        let call_request = X25CallRequest::parse(buffer, modulo, channel)?;
+
+        Ok(X25Packet::CallRequest(call_request))
+    } else if type_ == 0x0f {
+        let call_accepted = X25CallAccepted::parse(buffer, modulo, channel)?;
+
+        Ok(X25Packet::CallAccepted(call_accepted))
+    } else if type_ == 0x13 {
+        let clear_request = X25ClearRequest::parse(buffer, modulo, channel)?;
+
+        Ok(X25Packet::ClearRequest(clear_request))
+    } else if type_ == 0x17 {
+        let clear_confirmation = X25ClearConfirmation::parse(buffer, modulo, channel)?;
+
+        Ok(X25Packet::ClearConfirmation(clear_confirmation))
+    } else if type_ & 0x1f == 0x01 {
+        let receive_ready = X25ReceiveReady::parse(buffer, modulo, channel, type_)?;
+
+        Ok(X25Packet::ReceiveReady(receive_ready))
+    } else if type_ & 0x1f == 0x05 {
+        let receive_not_ready = X25ReceiveNotReady::parse(buffer, modulo, channel, type_)?;
+
+        Ok(X25Packet::ReceiveNotReady(receive_not_ready))
+    } else if type_ == 0x1b {
+        let reset_request = X25ResetRequest::parse(buffer, modulo, channel)?;
+
+        Ok(X25Packet::ResetRequest(reset_request))
+    } else if type_ == 0x1f {
+        let reset_confirmation = X25ResetConfirmation::parse(buffer, modulo, channel)?;
+
+        Ok(X25Packet::ResetConfirmation(reset_confirmation))
+    } else if type_ == 0xf1 {
+        let diagnostic = X25Diagnostic::parse(buffer, modulo, channel)?;
+
+        Ok(X25Packet::Diagnostic(diagnostic))
     } else {
         println!("I cannot deal with 0x{:02x}", type_);
 
@@ -323,141 +553,19 @@ pub fn parse_packet(mut buffer: Bytes) -> Result<X25Packet, String> {
     }
 }
 
-pub fn format_packet(packet: &X25Packet) -> Bytes {
-    let mut buffer = BytesMut::with_capacity(32);
-
+pub fn format_packet(packet: &X25Packet) -> Result<Bytes, String> {
     match packet {
-        X25Packet::CallRequest(call_request) => {
-            put_packet_header(
-                &mut buffer,
-                call_request.modulo,
-                0,
-                call_request.channel,
-                0x0b,
-            );
-
-            put_address_block(
-                &mut buffer,
-                &call_request.called_address,
-                &call_request.calling_address,
-            );
-
-            if let Some(facilities) = &call_request.facilities {
-                buffer.put_u8(facilities.len() as u8);
-                buffer.put_slice(facilities);
-            }
-
-            if let Some(call_user_data) = &call_request.call_user_data {
-                buffer.put_slice(call_user_data);
-            }
-        }
-
-        X25Packet::CallAccepted(call_accepted) => {
-            put_packet_header(
-                &mut buffer,
-                call_accepted.modulo,
-                0,
-                call_accepted.channel,
-                0x0f,
-            );
-        }
-
-        X25Packet::ClearRequest(clear_request) => {
-            put_packet_header(
-                &mut buffer,
-                clear_request.modulo,
-                0,
-                clear_request.channel,
-                0x13,
-            );
-
-            buffer.put_u8(clear_request.cause);
-
-            if let Some(diagnostic_code) = clear_request.diagnostic_code {
-                buffer.put_u8(diagnostic_code);
-            }
-        }
-
-        X25Packet::ClearConfirmation(clear_confirmation) => {
-            put_packet_header(
-                &mut buffer,
-                clear_confirmation.modulo,
-                0,
-                clear_confirmation.channel,
-                0x17,
-            );
-        }
-
-        X25Packet::Data(data) => {
-            // TODO: qualifier, delivery_confirmation
-            let gfi = 0b0000;
-
-            // TODO: more_data
-            let type_ = ((data.receive_sequence as u8) << 5) | ((data.send_sequence as u8) << 1);
-
-            put_packet_header(&mut buffer, data.modulo, gfi, data.channel, type_);
-
-            buffer.put_slice(&data.buffer);
-        }
-
-        X25Packet::ReceiveReady(receive_ready) => {
-            let type_ = ((receive_ready.receive_sequence as u8) << 5) | 0x01;
-
-            put_packet_header(
-                &mut buffer,
-                receive_ready.modulo,
-                0,
-                receive_ready.channel,
-                type_,
-            );
-        }
-
-        X25Packet::ReceiveNotReady(receive_not_ready) => {
-            let type_ = ((receive_not_ready.receive_sequence as u8) << 5) | 0x05;
-
-            put_packet_header(
-                &mut buffer,
-                receive_not_ready.modulo,
-                0,
-                receive_not_ready.channel,
-                type_,
-            );
-        }
-
-        X25Packet::ResetRequest(reset_request) => {
-            put_packet_header(
-                &mut buffer,
-                reset_request.modulo,
-                0,
-                reset_request.channel,
-                0x1b,
-            );
-
-            buffer.put_u8(reset_request.cause);
-
-            if let Some(diagnostic_code) = reset_request.diagnostic_code {
-                buffer.put_u8(diagnostic_code);
-            }
-        }
-
-        X25Packet::ResetConfirmation(reset_confirmation) => {
-            put_packet_header(
-                &mut buffer,
-                reset_confirmation.modulo,
-                0,
-                reset_confirmation.channel,
-                0x1f,
-            );
-        }
-
-        X25Packet::Diagnostic(diagnostic) => {
-            put_packet_header(&mut buffer, diagnostic.modulo, 0, 0, 0xf1);
-
-            buffer.put_u8(diagnostic.code);
-        }
+        X25Packet::CallRequest(call_request) => call_request.format(),
+        X25Packet::CallAccepted(call_accepted) => call_accepted.format(),
+        X25Packet::ClearRequest(clear_request) => clear_request.format(),
+        X25Packet::ClearConfirmation(clear_confirmation) => clear_confirmation.format(),
+        X25Packet::Data(data) => data.format(),
+        X25Packet::ReceiveReady(receive_ready) => receive_ready.format(),
+        X25Packet::ReceiveNotReady(receive_not_ready) => receive_not_ready.format(),
+        X25Packet::ResetRequest(reset_request) => reset_request.format(),
+        X25Packet::ResetConfirmation(reset_confirmation) => reset_confirmation.format(),
+        X25Packet::Diagnostic(diagnostic) => diagnostic.format(),
     }
-
-    buffer.freeze()
 }
 
 // TODO: gfi -> gfi_overlay?

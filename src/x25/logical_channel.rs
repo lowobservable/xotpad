@@ -259,7 +259,8 @@ impl X25LogicalChannel {
     }
 
     async fn send_packet(&mut self, packet: X25Packet) -> io::Result<()> {
-        let buffer = format_packet(&packet);
+        let buffer = format_packet(&packet)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
         self.xot_framed.send(buffer).await
     }
