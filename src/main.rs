@@ -113,14 +113,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .value_of("address")
             .map(|address| address.to_string())
             .or_else(|| env::var("X121_ADDRESS").ok())
-            .map(|address| X121Address::from_str(&address))
-            .transpose()?;
+            .unwrap_or_else(|| "".to_string());
 
-        if address.is_none() {
-            todo!();
-        }
-
-        let address = address.unwrap();
+        let address = X121Address::from_str(&address)?;
 
         let xot_gateway = matches
             .value_of("xot_gateway")
