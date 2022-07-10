@@ -127,14 +127,14 @@ impl X25LogicalChannel {
         Ok(())
     }
 
-    pub async fn clear_call(&mut self, cause: u8) -> io::Result<()> {
+    pub async fn clear_call(&mut self, cause: u8, diagnostic_code: Option<u8>) -> io::Result<()> {
         // TODO: states?
 
         let clear_request = X25Packet::ClearRequest(X25ClearRequest {
             modulo: self.modulo,
             channel: 1,
             cause,
-            diagnostic_code: None,
+            diagnostic_code,
         });
 
         // TODO: reset some things, right?

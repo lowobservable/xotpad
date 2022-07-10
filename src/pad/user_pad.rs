@@ -33,6 +33,7 @@ pub struct UserPad<'a, R, W> {
     state: UserPadState,
     reader: BufReader<R>,
     writer: BufWriter<W>,
+    modulo: X25Modulo,
     address: &'a X121Address,
     xot_resolver: &'a XotResolver,
     channel: Option<X25LogicalChannel>,
@@ -53,6 +54,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
     pub fn new(
         reader: R,
         writer: W,
+        modulo: X25Modulo,
         address: &'a X121Address,
         xot_resolver: &'a XotResolver,
         listener: Option<TcpListener>,
@@ -63,6 +65,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
             state: UserPadState::Command,
             reader: BufReader::new(reader),
             writer: BufWriter::new(writer),
+            modulo,
             address,
             xot_resolver,
             channel: None,
@@ -85,7 +88,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
         let xot_framed = Framed::new(tcp_stream, XotCodec::new());
 
-        let mut channel = X25LogicalChannel::new(xot_framed, X25Modulo::Normal);
+        let mut channel = X25LogicalChannel::new(xot_framed, self.modulo);
 
         let packet = channel.call(address, self.address).await?;
 
@@ -110,7 +113,11 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
     }
 
     async fn clear(&mut self) -> io::Result<()> {
-        self.channel.as_mut().unwrap().clear_call(0).await?;
+        self.channel
+            .as_mut()
+            .unwrap()
+            .clear_call(0, Some(0))
+            .await?;
 
         async_write!(self.writer, "CLR CONF\r\n")?;
 
@@ -159,7 +166,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
                 // TODO: really, this needs to go in a separate thread so it
                 // does not block while we are trying to accept the call...
-                call_request = wait_for_call(&mut self.listener, true) => {
+                call_request = wait_for_call(self.modulo, &mut self.listener, true) => {
                     match call_request {
                         Ok((channel, call_request)) => self.handle_incoming_call(channel, call_request).await?,
                         Err(error) => panic!("{}", error),
@@ -271,7 +278,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         if self.channel.is_some() {
             let cause = 1; // "OCC" - number busy
 
-            channel.clear_call(cause).await?;
+            channel.clear_call(cause, Some(0)).await?;
         } else if called_address.starts_with(&self.address.to_string()) {
             channel.accept_call().await?;
 
@@ -282,7 +289,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         } else {
             let cause = 0; // TODO: what should this be?
 
-            channel.clear_call(cause).await?;
+            channel.clear_call(cause, Some(0)).await?;
         }
 
         Ok(())
@@ -374,6 +381,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 }
 
 async fn wait_for_call(
+    modulo: X25Modulo,
     listener: &mut Option<TcpListener>,
     enable: bool,
 ) -> io::Result<(X25LogicalChannel, X25CallRequest)> {
@@ -385,7 +393,7 @@ async fn wait_for_call(
 
     let xot_framed = Framed::new(tcp_stream, XotCodec::new());
 
-    let mut channel = X25LogicalChannel::new(xot_framed, X25Modulo::Normal);
+    let mut channel = X25LogicalChannel::new(xot_framed, modulo);
 
     let call_request = channel.wait_for_call().await?;
 

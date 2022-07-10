@@ -15,6 +15,8 @@ use xotpad::x25::{X25CallRequest, X25LogicalChannel, X25Modulo};
 use xotpad::xot;
 use xotpad::xot::{XotCodec, XotResolver};
 
+const MODULO: X25Modulo = X25Modulo::Extended;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = ClapCommand::new("xotpad")
@@ -59,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if should_listen_only {
         let mut listen_table = ListenTable::new();
 
-        listen_table.register("^737202..$", "telnet 127.0.0.1 3333".into())?;
+        listen_table.register("^737202..$", "/home/andrew/tmp/inf0.py".into())?;
 
         let listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT)).await?;
 
@@ -70,14 +72,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let xot_framed = Framed::new(tcp_stream, XotCodec::new());
 
-            let mut channel = X25LogicalChannel::new(xot_framed, X25Modulo::Normal);
+            let mut channel = X25LogicalChannel::new(xot_framed, MODULO);
 
             let call_request = channel.wait_for_call().await?;
 
             let command = listen_table.lookup(&call_request);
 
             if command.is_none() {
-                channel.clear_call(0).await?;
+                channel.clear_call(0, Some(0)).await?;
                 continue;
             }
 
@@ -156,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut pad = UserPad::new(
             stdin(),
             stdout(),
+            MODULO,
             &address,
             &xot_resolver,
             listener,

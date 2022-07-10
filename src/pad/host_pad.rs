@@ -44,7 +44,7 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
                             self.handle_host_output(&buffer[0..length]).await?
                         }
                         Err(_) => {
-                            self.channel.clear_call(0).await?; // TODO: cause?
+                            self.channel.clear_call(0, Some(0)).await?; // TODO: cause?
 
                             self.is_running = false;
                         },
