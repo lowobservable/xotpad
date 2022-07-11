@@ -340,10 +340,17 @@ impl X25Data {
     }
 
     fn format_normal(&self) -> Result<Bytes, String> {
+        if self.send_sequence > 7 {
+            return Err("Invalid send sequence".into());
+        }
+
+        if self.receive_sequence > 7 {
+            return Err("Invalid receive sequence".into());
+        }
+
         let mut buffer = BytesMut::with_capacity(3 + self.buffer.len());
 
         let gfi_overlay = ((self.qualifier as u8) << 4) | ((self.delivery_confirmation as u8) << 3);
-
         let type_ = ((self.receive_sequence as u8) << 5)
             | ((self.more_data as u8) << 4)
             | ((self.send_sequence as u8) << 1);
@@ -356,10 +363,17 @@ impl X25Data {
     }
 
     fn format_extended(&self) -> Result<Bytes, String> {
+        if self.send_sequence > 127 {
+            return Err("Invalid send sequence".into());
+        }
+
+        if self.receive_sequence > 127 {
+            return Err("Invalid receive sequence".into());
+        }
+
         let mut buffer = BytesMut::with_capacity(4 + self.buffer.len());
 
         let gfi_overlay = ((self.qualifier as u8) << 4) | ((self.delivery_confirmation as u8) << 3);
-
         let type_ = (self.send_sequence as u8) << 1;
 
         put_packet_header(&mut buffer, self.modulo, gfi_overlay, self.channel, type_)?;
@@ -438,6 +452,10 @@ impl X25ReceiveReady {
     }
 
     fn format_normal(&self) -> Result<Bytes, String> {
+        if self.receive_sequence > 7 {
+            return Err("Invalid receive sequence".into());
+        }
+
         let mut buffer = BytesMut::with_capacity(3);
 
         let type_ = ((self.receive_sequence as u8) << 5) | 0x01;
@@ -448,11 +466,13 @@ impl X25ReceiveReady {
     }
 
     fn format_extended(&self) -> Result<Bytes, String> {
+        if self.receive_sequence > 127 {
+            return Err("Invalid receive sequence".into());
+        }
+
         let mut buffer = BytesMut::with_capacity(4);
 
-        let type_ = 0x01;
-
-        put_packet_header(&mut buffer, self.modulo, 0, self.channel, type_)?;
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x01)?;
 
         buffer.put_u8((self.receive_sequence as u8) << 1);
 
@@ -528,6 +548,10 @@ impl X25ReceiveNotReady {
     }
 
     fn format_normal(&self) -> Result<Bytes, String> {
+        if self.receive_sequence > 7 {
+            return Err("Invalid receive sequence".into());
+        }
+
         let mut buffer = BytesMut::with_capacity(3);
 
         let type_ = ((self.receive_sequence as u8) << 5) | 0x05;
@@ -538,11 +562,13 @@ impl X25ReceiveNotReady {
     }
 
     fn format_extended(&self) -> Result<Bytes, String> {
+        if self.receive_sequence > 127 {
+            return Err("Invalid receive sequence".into());
+        }
+
         let mut buffer = BytesMut::with_capacity(4);
 
-        let type_ = 0x05;
-
-        put_packet_header(&mut buffer, self.modulo, 0, self.channel, type_)?;
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x05)?;
 
         buffer.put_u8((self.receive_sequence as u8) << 1);
 
