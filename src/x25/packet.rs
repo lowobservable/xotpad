@@ -156,7 +156,7 @@ pub struct X25CallAccepted {
 }
 
 impl X25CallAccepted {
-    fn parse(buffer: Bytes, modulo: X25Modulo, channel: u16) -> Result<X25CallAccepted, String> {
+    fn parse(_buffer: Bytes, modulo: X25Modulo, channel: u16) -> Result<X25CallAccepted, String> {
         // TODO: additional optional address fields
         Ok(X25CallAccepted { modulo, channel })
     }
@@ -230,7 +230,7 @@ pub struct X25ClearConfirmation {
 
 impl X25ClearConfirmation {
     fn parse(
-        buffer: Bytes,
+        _buffer: Bytes,
         modulo: X25Modulo,
         channel: u16,
     ) -> Result<X25ClearConfirmation, String> {
@@ -261,7 +261,27 @@ pub struct X25Data {
 
 impl X25Data {
     fn parse(
-        mut buffer: Bytes,
+        buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        gfi: u8,
+        type_: u8,
+    ) -> Result<X25Data, String> {
+        match modulo {
+            X25Modulo::Normal => X25Data::parse_normal(buffer, modulo, channel, gfi, type_),
+            X25Modulo::Extended => X25Data::parse_extended(buffer, modulo, channel, gfi, type_),
+        }
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        match self.modulo {
+            X25Modulo::Normal => self.format_normal(),
+            X25Modulo::Extended => self.format_extended(),
+        }
+    }
+
+    fn parse_normal(
+        buffer: Bytes,
         modulo: X25Modulo,
         channel: u16,
         gfi: u8,
@@ -270,30 +290,9 @@ impl X25Data {
         let qualifier = (gfi & 0x80) >> 4 == 1;
         let delivery_confirmation = (gfi & 0x40) >> 3 == 1;
 
-        let send_sequence;
-        let receive_sequence;
-        let more_data;
-
-        match modulo {
-            X25Modulo::Normal => {
-                send_sequence = ((type_ & 0x0e) >> 1) as u16;
-                receive_sequence = ((type_ & 0xe0) >> 5) as u16;
-                more_data = (type_ & 0x10) >> 4 == 1;
-            }
-
-            X25Modulo::Extended => {
-                if buffer.remaining() < 1 {
-                    return Err("Packet too short".into());
-                }
-
-                send_sequence = ((type_ & 0xfe) >> 1) as u16;
-
-                let byte = buffer.get_u8();
-
-                receive_sequence = ((byte & 0xfe) >> 1) as u16;
-                more_data = (byte & 0x01) == 1;
-            }
-        }
+        let send_sequence = ((type_ & 0x0e) >> 1) as u16;
+        let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
+        let more_data = (type_ & 0x10) >> 4 == 1;
 
         Ok(X25Data {
             modulo,
@@ -307,25 +306,65 @@ impl X25Data {
         })
     }
 
-    fn format(&self) -> Result<Bytes, String> {
+    fn parse_extended(
+        mut buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        gfi: u8,
+        type_: u8,
+    ) -> Result<X25Data, String> {
+        if buffer.remaining() < 1 {
+            return Err("Packet too short".into());
+        }
+
+        let qualifier = (gfi & 0x80) >> 4 == 1;
+        let delivery_confirmation = (gfi & 0x40) >> 3 == 1;
+
+        let send_sequence = ((type_ & 0xfe) >> 1) as u16;
+
+        let byte = buffer.get_u8();
+
+        let receive_sequence = ((byte & 0xfe) >> 1) as u16;
+        let more_data = (byte & 0x01) == 1;
+
+        Ok(X25Data {
+            modulo,
+            channel,
+            send_sequence,
+            receive_sequence,
+            qualifier,
+            delivery_confirmation,
+            more_data,
+            buffer,
+        })
+    }
+
+    fn format_normal(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(3 + self.buffer.len());
+
+        let gfi_overlay = ((self.qualifier as u8) << 4) | ((self.delivery_confirmation as u8) << 3);
+
+        let type_ = ((self.receive_sequence as u8) << 5)
+            | ((self.more_data as u8) << 4)
+            | ((self.send_sequence as u8) << 1);
+
+        put_packet_header(&mut buffer, self.modulo, gfi_overlay, self.channel, type_)?;
+
+        buffer.put_slice(&self.buffer);
+
+        Ok(buffer.freeze())
+    }
+
+    fn format_extended(&self) -> Result<Bytes, String> {
         let mut buffer = BytesMut::with_capacity(4 + self.buffer.len());
 
         let gfi_overlay = ((self.qualifier as u8) << 4) | ((self.delivery_confirmation as u8) << 3);
 
-        let type_ = match self.modulo {
-            X25Modulo::Normal => {
-                ((self.receive_sequence as u8) << 5)
-                    | ((self.more_data as u8) << 4)
-                    | ((self.send_sequence as u8) << 1)
-            }
-            X25Modulo::Extended => (self.send_sequence as u8) << 1,
-        };
+        let type_ = (self.send_sequence as u8) << 1;
 
         put_packet_header(&mut buffer, self.modulo, gfi_overlay, self.channel, type_)?;
 
-        if self.modulo == X25Modulo::Extended {
-            buffer.put_u8(((self.receive_sequence as u8) << 1) | (self.more_data as u8));
-        }
+        buffer.put_u8(((self.receive_sequence as u8) << 1) | (self.more_data as u8));
 
         buffer.put_slice(&self.buffer);
 
@@ -342,26 +381,31 @@ pub struct X25ReceiveReady {
 
 impl X25ReceiveReady {
     fn parse(
-        mut buffer: Bytes,
+        buffer: Bytes,
         modulo: X25Modulo,
         channel: u16,
         type_: u8,
     ) -> Result<X25ReceiveReady, String> {
-        let receive_sequence = match modulo {
-            X25Modulo::Normal => ((type_ & 0xe0) >> 5) as u16,
+        match modulo {
+            X25Modulo::Normal => X25ReceiveReady::parse_normal(buffer, modulo, channel, type_),
+            X25Modulo::Extended => X25ReceiveReady::parse_extended(buffer, modulo, channel, type_),
+        }
+    }
 
-            X25Modulo::Extended => {
-                if type_ & 0xe0 != 0 {
-                    return Err("Unidentifiable packet".into());
-                }
+    fn format(&self) -> Result<Bytes, String> {
+        match self.modulo {
+            X25Modulo::Normal => self.format_normal(),
+            X25Modulo::Extended => self.format_extended(),
+        }
+    }
 
-                if buffer.remaining() < 1 {
-                    return Err("Packet too short".into());
-                }
-
-                ((buffer.get_u8() & 0xfe) >> 1) as u16
-            }
-        };
+    fn parse_normal(
+        _buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        type_: u8,
+    ) -> Result<X25ReceiveReady, String> {
+        let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
 
         Ok(X25ReceiveReady {
             modulo,
@@ -370,19 +414,47 @@ impl X25ReceiveReady {
         })
     }
 
-    fn format(&self) -> Result<Bytes, String> {
+    fn parse_extended(
+        mut buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        type_: u8,
+    ) -> Result<X25ReceiveReady, String> {
+        if type_ & 0xe0 != 0 {
+            return Err("Unidentifiable packet".into());
+        }
+
+        if buffer.remaining() < 1 {
+            return Err("Packet too short".into());
+        }
+
+        let receive_sequence = ((buffer.get_u8() & 0xfe) >> 1) as u16;
+
+        Ok(X25ReceiveReady {
+            modulo,
+            channel,
+            receive_sequence,
+        })
+    }
+
+    fn format_normal(&self) -> Result<Bytes, String> {
         let mut buffer = BytesMut::with_capacity(3);
 
-        let type_ = match self.modulo {
-            X25Modulo::Normal => ((self.receive_sequence as u8) << 5) | 0x01,
-            X25Modulo::Extended => 0x01,
-        };
+        let type_ = ((self.receive_sequence as u8) << 5) | 0x01;
 
         put_packet_header(&mut buffer, self.modulo, 0, self.channel, type_)?;
 
-        if self.modulo == X25Modulo::Extended {
-            buffer.put_u8((self.receive_sequence as u8) << 1);
-        }
+        Ok(buffer.freeze())
+    }
+
+    fn format_extended(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(4);
+
+        let type_ = 0x01;
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, type_)?;
+
+        buffer.put_u8((self.receive_sequence as u8) << 1);
 
         Ok(buffer.freeze())
     }
@@ -397,26 +469,33 @@ pub struct X25ReceiveNotReady {
 
 impl X25ReceiveNotReady {
     fn parse(
-        mut buffer: Bytes,
+        buffer: Bytes,
         modulo: X25Modulo,
         channel: u16,
         type_: u8,
     ) -> Result<X25ReceiveNotReady, String> {
-        let receive_sequence = match modulo {
-            X25Modulo::Normal => ((type_ & 0xe0) >> 5) as u16,
-
+        match modulo {
+            X25Modulo::Normal => X25ReceiveNotReady::parse_normal(buffer, modulo, channel, type_),
             X25Modulo::Extended => {
-                if type_ & 0xe0 != 0 {
-                    return Err("Unidentifiable packet".into());
-                }
-
-                if buffer.remaining() < 1 {
-                    return Err("Packet too short".into());
-                }
-
-                ((buffer.get_u8() & 0xfe) >> 1) as u16
+                X25ReceiveNotReady::parse_extended(buffer, modulo, channel, type_)
             }
-        };
+        }
+    }
+
+    fn format(&self) -> Result<Bytes, String> {
+        match self.modulo {
+            X25Modulo::Normal => self.format_normal(),
+            X25Modulo::Extended => self.format_extended(),
+        }
+    }
+
+    fn parse_normal(
+        _buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        type_: u8,
+    ) -> Result<X25ReceiveNotReady, String> {
+        let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
 
         Ok(X25ReceiveNotReady {
             modulo,
@@ -425,19 +504,47 @@ impl X25ReceiveNotReady {
         })
     }
 
-    fn format(&self) -> Result<Bytes, String> {
+    fn parse_extended(
+        mut buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+        type_: u8,
+    ) -> Result<X25ReceiveNotReady, String> {
+        if type_ & 0xe0 != 0 {
+            return Err("Unidentifiable packet".into());
+        }
+
+        if buffer.remaining() < 1 {
+            return Err("Packet too short".into());
+        }
+
+        let receive_sequence = ((buffer.get_u8() & 0xfe) >> 1) as u16;
+
+        Ok(X25ReceiveNotReady {
+            modulo,
+            channel,
+            receive_sequence,
+        })
+    }
+
+    fn format_normal(&self) -> Result<Bytes, String> {
         let mut buffer = BytesMut::with_capacity(3);
 
-        let type_ = match self.modulo {
-            X25Modulo::Normal => ((self.receive_sequence as u8) << 5) | 0x05,
-            X25Modulo::Extended => 0x05,
-        };
+        let type_ = ((self.receive_sequence as u8) << 5) | 0x05;
 
         put_packet_header(&mut buffer, self.modulo, 0, self.channel, type_)?;
 
-        if self.modulo == X25Modulo::Extended {
-            buffer.put_u8((self.receive_sequence as u8) << 1);
-        }
+        Ok(buffer.freeze())
+    }
+
+    fn format_extended(&self) -> Result<Bytes, String> {
+        let mut buffer = BytesMut::with_capacity(4);
+
+        let type_ = 0x05;
+
+        put_packet_header(&mut buffer, self.modulo, 0, self.channel, type_)?;
+
+        buffer.put_u8((self.receive_sequence as u8) << 1);
 
         Ok(buffer.freeze())
     }
@@ -500,7 +607,7 @@ pub struct X25ResetConfirmation {
 
 impl X25ResetConfirmation {
     fn parse(
-        buffer: Bytes,
+        _buffer: Bytes,
         modulo: X25Modulo,
         channel: u16,
     ) -> Result<X25ResetConfirmation, String> {
