@@ -6,6 +6,7 @@ use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
 use crate::x121::X121Address;
+use crate::x25::facility::X25Facility;
 use crate::x25::packet::{
     format_packet, parse_packet, X25CallAccepted, X25CallRequest, X25ClearConfirmation,
     X25ClearRequest, X25Data, X25Modulo, X25Packet, X25PacketType, X25ReceiveReady,
@@ -77,13 +78,24 @@ impl X25LogicalChannel {
             panic!("invalid state"); // TODO
         }
 
+        let facilities = vec![
+            X25Facility::PacketSize {
+                from_called: 7,
+                from_calling: 7,
+            },
+            X25Facility::WindowSize {
+                from_called: 2,
+                from_calling: 2,
+            },
+        ];
+
         let call_request = X25Packet::CallRequest(X25CallRequest {
             modulo: self.modulo,
             channel: 1,
             called_address: called_address.clone(), // TODO, can this be a ref?
             calling_address: calling_address.clone(),
-            facilities: Some(Bytes::from_static(b"B\x07\x07C\x02\x02")), // TODO
-            call_user_data: Some(Bytes::from_static(b"\x01\0\0\0")),     // TODO
+            facilities: Some(facilities),
+            call_user_data: Some(Bytes::from_static(b"\x01\0\0\0")), // TODO
         });
 
         self.state = X25LogicalChannelState::AwaitingCallAccepted;

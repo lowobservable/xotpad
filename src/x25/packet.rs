@@ -1,6 +1,7 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::x121::X121Address;
+use crate::x25::facility::{format_facilities, parse_facilities, X25Facility};
 
 pub const MIN_PACKET_LENGTH: usize = 3;
 
@@ -92,7 +93,7 @@ pub struct X25CallRequest {
     pub channel: u16,
     pub called_address: X121Address,
     pub calling_address: X121Address,
-    pub facilities: Option<Bytes>,
+    pub facilities: Option<Vec<X25Facility>>,
     pub call_user_data: Option<Bytes>,
 }
 
@@ -101,13 +102,7 @@ impl X25CallRequest {
         let (called_address, calling_address) = parse_address_block(&mut buffer)?;
 
         let facilities = if buffer.has_remaining() {
-            let facilities_length = buffer.get_u8() as usize;
-
-            if buffer.remaining() < facilities_length {
-                return Err("Packet too short".into());
-            }
-
-            Some(buffer.split_to(facilities_length))
+            Some(parse_facilities_block(&mut buffer)?)
         } else {
             None
         };
@@ -136,8 +131,7 @@ impl X25CallRequest {
         put_address_block(&mut buffer, &self.called_address, &self.calling_address);
 
         if let Some(facilities) = &self.facilities {
-            buffer.put_u8(facilities.len() as u8);
-            buffer.put_slice(facilities);
+            put_facilities_block(&mut buffer, facilities)?;
         }
 
         if let Some(call_user_data) = &self.call_user_data {
@@ -836,4 +830,38 @@ fn put_address_block(buffer: &mut BytesMut, called: &X121Address, calling: &X121
 
         buffer.put_u8((high << 4) | low);
     }
+}
+
+fn parse_facilities_block(buffer: &mut Bytes) -> Result<Vec<X25Facility>, String> {
+    if buffer.remaining() < 1 {
+        return Err("Packet too short".into());
+    }
+
+    let facilities_length = buffer.get_u8() as usize;
+
+    if buffer.remaining() < facilities_length {
+        return Err("Facility length larger than remainder of packet".into());
+    }
+
+    parse_facilities(buffer.split_to(facilities_length))
+
+    // TODO: ensure that the facilities are unique...
+}
+
+fn put_facilities_block(
+    buffer: &mut BytesMut,
+    facilities: &Vec<X25Facility>,
+) -> Result<(), String> {
+    // TODO: ensure that the facilities are unique...
+
+    let xxx = format_facilities(facilities);
+
+    if xxx.len() > 255 {
+        return Err("Facilities too long".into());
+    }
+
+    buffer.put_u8(xxx.len() as u8);
+    buffer.put(xxx);
+
+    Ok(())
 }
