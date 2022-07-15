@@ -9,23 +9,20 @@ Okay, so this is just a prototype for now... the goal is to create a cross-platf
 allowing access to X.25 networks using XOT described in
 [RFC 1613](https://www.rfc-editor.org/rfc/rfc1613.html).
 
+  - [ ] User space X.25 over TCP (XOT)
+      - [ ] Modulo 8
+      - [ ] Modulo 128
+      - [ ] Flow control parameter negotiation (packet and window size)
   - [ ] Interactive _Triple-X_ PAD (X.3, X.28 and X.29)
   - [ ] Host PAD providing access to local processes
   - [ ] DNS-based X.25 address resolution
 
 ## Usage
 
-For now, set these environment variables:
-
-```
-export X121_ADDRESS=111111
-export XOT_GATEWAY=...
-```
-
 To connect to a host:
 
 ```
-xotpad 222222
+xotpad 73741100
 ```
 
 To start an interactive PAD:
