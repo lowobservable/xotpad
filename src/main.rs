@@ -128,8 +128,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             xot_resolver.add("", xot_gateway);
         } else {
             // TODO...
-            xot_resolver.add("^737202..$", "127.0.0.1".into());
-            xot_resolver.add("^737.....$", "pac1".into());
             xot_resolver.add("^(...)(...)..$", r"\2.\1.x25.org".into());
         }
 

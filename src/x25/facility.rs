@@ -2,8 +2,14 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 #[derive(Debug)]
 pub enum X25Facility {
-    PacketSize { from_called: u8, from_calling: u8 },
-    WindowSize { from_called: u8, from_calling: u8 },
+    PacketSize {
+        from_called: usize,
+        from_calling: usize,
+    },
+    WindowSize {
+        from_called: u8,
+        from_calling: u8,
+    },
     ClassA(u8, (u8,)),
     ClassB(u8, (u8, u8)),
     ClassC(u8, (u8, u8, u8)),
@@ -21,8 +27,8 @@ pub fn parse_facilities(mut buffer: Bytes) -> Result<Vec<X25Facility>, String> {
             let (from_called, from_calling) = parse_class_b_parameters(&mut buffer)?;
 
             facilities.push(X25Facility::PacketSize {
-                from_called,
-                from_calling,
+                from_called: decode_packet_size(from_called)?,
+                from_calling: decode_packet_size(from_calling)?,
             });
         } else if code == 0x43 {
             let (from_called, from_calling) = parse_class_b_parameters(&mut buffer)?;
@@ -66,8 +72,11 @@ pub fn format_facilities(facilities: &Vec<X25Facility>) -> Bytes {
                 from_called,
                 from_calling,
             } => {
+                let from_called = encode_packet_size(*from_called).expect("TODO");
+                let from_calling = encode_packet_size(*from_calling).expect("TODO");
+
                 buffer.put_u8(0x42);
-                buffer.put(format_class_b_parameters(&(*from_called, *from_calling)));
+                buffer.put(format_class_b_parameters(&(from_called, from_calling)));
             }
             X25Facility::WindowSize {
                 from_called,
@@ -174,4 +183,35 @@ fn format_class_d_parameters(parameters: &Bytes) -> Bytes {
     buffer.put_slice(parameters);
 
     buffer.freeze()
+}
+
+fn encode_packet_size(size: usize) -> Result<u8, String> {
+    // TODO: This could be replaced with log2 when available...
+    match size {
+        16 => Ok(4),
+        32 => Ok(5),
+        64 => Ok(6),
+        128 => Ok(7),
+        256 => Ok(8),
+        512 => Ok(9),
+        1024 => Ok(10),
+        2048 => Ok(11),
+        4096 => Ok(12),
+        _ => Err("Facility value not allowed or invalid".into()),
+    }
+}
+
+fn decode_packet_size(value: u8) -> Result<usize, String> {
+    match value {
+        4 => Ok(16),
+        5 => Ok(32),
+        6 => Ok(64),
+        7 => Ok(128),
+        8 => Ok(256),
+        9 => Ok(512),
+        10 => Ok(1024),
+        11 => Ok(2048),
+        12 => Ok(4096),
+        _ => Err("Facility value not allowed or invalid".into()),
+    }
 }

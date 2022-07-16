@@ -14,6 +14,9 @@ use crate::x25::packet::{
 };
 use crate::xot::XotCodec;
 
+const DEFAULT_MAX_PACKET_SIZE: usize = 128;
+const DEFAULT_WINDOW_SIZE: u16 = 2;
+
 // TODO: how can I get rid of the dependency on TcpStream and XotCodec here?
 pub struct X25LogicalChannel {
     xot_framed: Framed<TcpStream, XotCodec>,
@@ -25,6 +28,8 @@ pub struct X25LogicalChannel {
     send_queue: VecDeque<(Bytes, bool)>,
     send_sequence: u16,
 
+    receive_max_packet_size: usize,
+    receive_window_size: u16,
     receive_sequence: u16,
 
     is_remote_ready: bool,
@@ -58,10 +63,12 @@ impl X25LogicalChannel {
             xot_framed,
             state: X25LogicalChannelState::Ready,
             modulo,
-            send_max_packet_size: 128,
-            send_window_size: 2,
+            send_max_packet_size: DEFAULT_MAX_PACKET_SIZE,
+            send_window_size: DEFAULT_WINDOW_SIZE,
             send_queue: VecDeque::new(),
             send_sequence: 0,
+            receive_max_packet_size: DEFAULT_MAX_PACKET_SIZE,
+            receive_window_size: DEFAULT_WINDOW_SIZE,
             receive_sequence: 0,
             is_remote_ready: true,
             xxx_un_rrd_packets: 0,
@@ -80,12 +87,12 @@ impl X25LogicalChannel {
 
         let facilities = vec![
             X25Facility::PacketSize {
-                from_called: 7,
-                from_calling: 7,
+                from_called: self.receive_max_packet_size,
+                from_calling: self.send_max_packet_size,
             },
             X25Facility::WindowSize {
-                from_called: 2,
-                from_calling: 2,
+                from_called: self.receive_window_size as u8,
+                from_calling: self.send_window_size as u8,
             },
         ];
 

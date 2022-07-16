@@ -84,7 +84,9 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
             return Ok(());
         }
 
-        let tcp_stream = TcpStream::connect((xot_gateway.unwrap(), xot::TCP_PORT)).await?;
+        let xot_gateway = xot_gateway.unwrap();
+
+        let tcp_stream = TcpStream::connect((xot_gateway, xot::TCP_PORT)).await?;
 
         let xot_framed = Framed::new(tcp_stream, XotCodec::new());
 
