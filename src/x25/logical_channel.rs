@@ -2,6 +2,7 @@ use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use std::collections::VecDeque;
 use std::io;
+use std::str::FromStr;
 use tokio::net::TcpStream;
 use tokio_util::codec::Framed;
 
@@ -101,8 +102,8 @@ impl X25LogicalChannel {
             channel: 1,
             called_address: called_address.clone(), // TODO, can this be a ref?
             calling_address: calling_address.clone(),
-            facilities: Some(facilities),
-            call_user_data: Some(Bytes::from_static(b"\x01\0\0\0")), // TODO
+            facilities,
+            call_user_data: Bytes::from_static(b"\x01\0\0\0"), // TODO
         });
 
         self.state = X25LogicalChannelState::AwaitingCallAccepted;
@@ -134,9 +135,14 @@ impl X25LogicalChannel {
             panic!("invalid state"); // TODO
         }
 
+        let facilities = Vec::new();
+
         let call_accepted = X25Packet::CallAccepted(X25CallAccepted {
             modulo: self.modulo,
             channel: 1,
+            called_address: X121Address::from_str("").unwrap(),
+            calling_address: X121Address::from_str("").unwrap(),
+            facilities,
         });
 
         self.send_packet(call_accepted).await?;

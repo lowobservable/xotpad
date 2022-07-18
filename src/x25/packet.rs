@@ -1,4 +1,5 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use std::str::FromStr;
 
 use crate::x121::X121Address;
 use crate::x25::facility::{format_facilities, parse_facilities, X25Facility};
@@ -93,8 +94,8 @@ pub struct X25CallRequest {
     pub channel: u16,
     pub called_address: X121Address,
     pub calling_address: X121Address,
-    pub facilities: Option<Vec<X25Facility>>,
-    pub call_user_data: Option<Bytes>,
+    pub facilities: Vec<X25Facility>,
+    pub call_user_data: Bytes,
 }
 
 impl X25CallRequest {
@@ -102,15 +103,15 @@ impl X25CallRequest {
         let (called_address, calling_address) = parse_address_block(&mut buffer)?;
 
         let facilities = if buffer.has_remaining() {
-            Some(parse_facilities_block(&mut buffer)?)
+            parse_facilities_block(&mut buffer)?
         } else {
-            None
+            Vec::new()
         };
 
         let call_user_data = if buffer.has_remaining() {
-            Some(buffer)
+            buffer
         } else {
-            None
+            Bytes::new()
         };
 
         Ok(X25CallRequest {
@@ -130,12 +131,12 @@ impl X25CallRequest {
 
         put_address_block(&mut buffer, &self.called_address, &self.calling_address);
 
-        if let Some(facilities) = &self.facilities {
-            put_facilities_block(&mut buffer, facilities)?;
+        if !self.facilities.is_empty() || !self.call_user_data.is_empty() {
+            put_facilities_block(&mut buffer, &self.facilities)?;
         }
 
-        if let Some(call_user_data) = &self.call_user_data {
-            buffer.put_slice(call_user_data);
+        if !self.call_user_data.is_empty() {
+            buffer.put_slice(&self.call_user_data);
         }
 
         Ok(buffer.freeze())
@@ -146,19 +147,55 @@ impl X25CallRequest {
 pub struct X25CallAccepted {
     pub modulo: X25Modulo,
     pub channel: u16,
-    // TODO: called_address, calling_address etc.
+    pub called_address: X121Address,
+    pub calling_address: X121Address,
+    pub facilities: Vec<X25Facility>,
 }
 
 impl X25CallAccepted {
-    fn parse(_buffer: Bytes, modulo: X25Modulo, channel: u16) -> Result<X25CallAccepted, String> {
-        // TODO: additional optional address fields
-        Ok(X25CallAccepted { modulo, channel })
+    fn parse(
+        mut buffer: Bytes,
+        modulo: X25Modulo,
+        channel: u16,
+    ) -> Result<X25CallAccepted, String> {
+        let (called_address, calling_address) = if buffer.has_remaining() {
+            parse_address_block(&mut buffer)?
+        } else {
+            let null_address = X121Address::from_str("").unwrap();
+
+            (null_address.clone(), null_address)
+        };
+
+        let facilities = if buffer.has_remaining() {
+            parse_facilities_block(&mut buffer)?
+        } else {
+            Vec::new()
+        };
+
+        Ok(X25CallAccepted {
+            modulo,
+            channel,
+            called_address,
+            calling_address,
+            facilities,
+        })
     }
 
     fn format(&self) -> Result<Bytes, String> {
         let mut buffer = BytesMut::with_capacity(3);
 
         put_packet_header(&mut buffer, self.modulo, 0, self.channel, 0x0f)?;
+
+        if !self.called_address.is_empty()
+            || !self.calling_address.is_empty()
+            || !self.facilities.is_empty()
+        {
+            put_address_block(&mut buffer, &self.called_address, &self.calling_address);
+        }
+
+        if !self.facilities.is_empty() {
+            put_facilities_block(&mut buffer, &self.facilities)?;
+        }
 
         Ok(buffer.freeze())
     }
@@ -170,7 +207,6 @@ pub struct X25ClearRequest {
     pub channel: u16,
     pub cause: u8,
     pub diagnostic_code: Option<u8>,
-    // TODO: called_address, calling_address etc.
 }
 
 impl X25ClearRequest {
@@ -191,7 +227,6 @@ impl X25ClearRequest {
             None
         };
 
-        // TODO: additional optional address fields
         Ok(X25ClearRequest {
             modulo,
             channel,
@@ -219,7 +254,6 @@ impl X25ClearRequest {
 pub struct X25ClearConfirmation {
     pub modulo: X25Modulo,
     pub channel: u16,
-    // TODO: optional called address calling address etc.
 }
 
 impl X25ClearConfirmation {
@@ -228,7 +262,6 @@ impl X25ClearConfirmation {
         modulo: X25Modulo,
         channel: u16,
     ) -> Result<X25ClearConfirmation, String> {
-        // TODO: additional optional address fields
         Ok(X25ClearConfirmation { modulo, channel })
     }
 
