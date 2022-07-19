@@ -21,10 +21,7 @@ const MODULO: X25Modulo = X25Modulo::Extended;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = ClapCommand::new("xotpad")
         .arg(
-            Arg::new("address")
-                .short('a')
-                .takes_value(true)
-                .value_name("address")
+            Arg::new("address").short('a').takes_value(true).value_name("address")
                 .help("Local X.121 address"),
         )
         .arg(
