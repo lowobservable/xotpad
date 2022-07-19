@@ -1,4 +1,5 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use std::collections::HashSet;
 
 #[derive(Debug)]
 pub enum X25Facility {
@@ -19,8 +20,15 @@ pub enum X25Facility {
 pub fn parse_facilities(mut buffer: Bytes) -> Result<Vec<X25Facility>, String> {
     let mut facilities = Vec::new();
 
+    let mut codes: HashSet<u8> = HashSet::new();
+
     while !buffer.is_empty() {
         let code = buffer.get_u8();
+
+        if !codes.insert(code) {
+            return Err("Facility code repeated".into());
+        }
+
         let class = (code & 0xc0) >> 6;
 
         if code == 0x42 {
@@ -63,8 +71,10 @@ pub fn parse_facilities(mut buffer: Bytes) -> Result<Vec<X25Facility>, String> {
     Ok(facilities)
 }
 
-pub fn format_facilities(facilities: &Vec<X25Facility>) -> Bytes {
+pub fn format_facilities(facilities: &Vec<X25Facility>) -> Result<Bytes, String> {
     let mut buffer = BytesMut::new();
+
+    // TODO: ensure that outgoing facility codes are unique?
 
     for facility in facilities {
         match facility {
@@ -72,8 +82,8 @@ pub fn format_facilities(facilities: &Vec<X25Facility>) -> Bytes {
                 from_called,
                 from_calling,
             } => {
-                let from_called = encode_packet_size(*from_called).expect("TODO");
-                let from_calling = encode_packet_size(*from_calling).expect("TODO");
+                let from_called = encode_packet_size(*from_called)?;
+                let from_calling = encode_packet_size(*from_calling)?;
 
                 buffer.put_u8(0x42);
                 buffer.put(format_class_b_parameters(&(from_called, from_calling)));
@@ -104,7 +114,7 @@ pub fn format_facilities(facilities: &Vec<X25Facility>) -> Bytes {
         }
     }
 
-    buffer.freeze()
+    Ok(buffer.freeze())
 }
 
 fn parse_class_a_parameters(buffer: &mut Bytes) -> Result<(u8,), String> {

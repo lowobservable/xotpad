@@ -108,6 +108,14 @@ impl X25CallRequest {
             Vec::new()
         };
 
+        // The call user data field has a maximum length of 128 bytes when used in
+        // conjunction with the fast select facility, otherwise 16 bytes. Although
+        // we do not support the fast select facility, we will defer that validation
+        // to the logical channel layer.
+        if buffer.remaining() > 128 {
+            return Err("Call user data too long".into());
+        }
+
         let call_user_data = if buffer.has_remaining() {
             buffer
         } else {
@@ -158,6 +166,10 @@ impl X25CallAccepted {
         modulo: X25Modulo,
         channel: u16,
     ) -> Result<X25CallAccepted, String> {
+        // The call accepted packet may not include an address block if there are
+        // no facilities included, in that case we assume that the called and
+        // calling addresses are null which is the value that would be used if
+        // the address block were included only in order to include facilities.
         let (called_address, calling_address) = if buffer.has_remaining() {
             parse_address_block(&mut buffer)?
         } else {
@@ -794,7 +806,6 @@ pub fn format_packet(packet: &X25Packet) -> Result<Bytes, String> {
     }
 }
 
-// TODO: gfi -> gfi_overlay?
 fn put_packet_header(
     buffer: &mut BytesMut,
     modulo: X25Modulo,
@@ -877,24 +888,20 @@ fn parse_facilities_block(buffer: &mut Bytes) -> Result<Vec<X25Facility>, String
     }
 
     parse_facilities(buffer.split_to(facilities_length))
-
-    // TODO: ensure that the facilities are unique...
 }
 
 fn put_facilities_block(
     buffer: &mut BytesMut,
     facilities: &Vec<X25Facility>,
 ) -> Result<(), String> {
-    // TODO: ensure that the facilities are unique...
+    let facilities_buffer = format_facilities(facilities)?;
 
-    let xxx = format_facilities(facilities);
-
-    if xxx.len() > 255 {
+    if facilities_buffer.len() > 255 {
         return Err("Facilities too long".into());
     }
 
-    buffer.put_u8(xxx.len() as u8);
-    buffer.put(xxx);
+    buffer.put_u8(facilities_buffer.len() as u8);
+    buffer.put(facilities_buffer);
 
     Ok(())
 }
