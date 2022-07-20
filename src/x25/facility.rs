@@ -1,7 +1,7 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::collections::HashSet;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum X25Facility {
     PacketSize {
         from_called: usize,

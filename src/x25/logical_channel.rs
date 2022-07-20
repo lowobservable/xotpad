@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
+use std::cmp::min;
 use std::collections::VecDeque;
 use std::io;
 use std::str::FromStr;
@@ -130,12 +131,12 @@ impl X25LogicalChannel {
         panic!("TODO");
     }
 
-    pub async fn accept_call(&mut self) -> io::Result<()> {
+    pub async fn accept_call(&mut self, call_request: &X25CallRequest) -> io::Result<()> {
         if self.state != X25LogicalChannelState::AwaitingCallAccepted {
             panic!("invalid state"); // TODO
         }
 
-        let facilities = Vec::new();
+        let facilities = self.negotiate_facilities(call_request);
 
         let call_accepted = X25Packet::CallAccepted(X25CallAccepted {
             modulo: self.modulo,
@@ -335,12 +336,16 @@ impl X25LogicalChannel {
             }
         } else if self.state == X25LogicalChannelState::AwaitingCallAccepted {
             match packet {
-                X25Packet::CallAccepted(_) => {
+                X25Packet::CallAccepted(ref call_accepted) => {
+                    // Adopt the facilities provided by the other party.
+                    self.adopt_facilities(call_accepted);
+
                     self.state = X25LogicalChannelState::DataTransfer;
                 }
                 X25Packet::ClearRequest(_) => {
                     self.state = X25LogicalChannelState::Ready;
                 }
+                // TODO: Call collision...
                 _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
             }
         } else if self.state == X25LogicalChannelState::DataTransfer {
@@ -446,6 +451,76 @@ impl X25LogicalChannel {
         // ^^^
 
         Some(Ok(packet))
+    }
+
+    fn adopt_facilities(&mut self, call_accepted: &X25CallAccepted) {
+        let facilities = &call_accepted.facilities;
+
+        // When adopting facilities from a received call accepted packet, we are
+        // the "calling" party.
+        if let Some((from_called, from_calling)) = facilities.iter().find_map(|f| match f {
+            X25Facility::PacketSize {
+                from_called,
+                from_calling,
+            } => Some((from_called, from_calling)),
+            _ => None,
+        }) {
+            self.send_max_packet_size = *from_calling;
+            self.receive_max_packet_size = *from_called;
+        }
+
+        if let Some((from_called, from_calling)) = facilities.iter().find_map(|f| match f {
+            X25Facility::WindowSize {
+                from_called,
+                from_calling,
+            } => Some((from_called, from_calling)),
+            _ => None,
+        }) {
+            self.send_window_size = *from_calling as u16;
+            self.receive_window_size = *from_called as u16;
+        }
+    }
+
+    fn negotiate_facilities(&mut self, call_request: &X25CallRequest) -> Vec<X25Facility> {
+        let request_facilities = &call_request.facilities;
+
+        let mut facilities = Vec::new();
+
+        // When negotiating facilities from a received call request packet, we are
+        // the "called" party.
+        if let Some((from_called, from_calling)) = request_facilities.iter().find_map(|f| match f {
+            X25Facility::PacketSize {
+                from_called,
+                from_calling,
+            } => Some((from_called, from_calling)),
+            _ => None,
+        }) {
+            self.send_max_packet_size = min(self.send_max_packet_size, *from_called);
+            self.receive_max_packet_size = min(self.receive_max_packet_size, *from_calling);
+
+            facilities.push(X25Facility::PacketSize {
+                from_called: self.send_max_packet_size,
+                from_calling: self.receive_max_packet_size,
+            });
+        }
+
+        if let Some((from_called, from_calling)) = request_facilities.iter().find_map(|f| match f {
+            X25Facility::WindowSize {
+                from_called,
+                from_calling,
+            } => Some((from_called, from_calling)),
+            _ => None,
+        }) {
+            self.send_window_size = min(self.send_window_size, *from_called as u16);
+            self.receive_window_size = min(self.receive_window_size, *from_calling as u16);
+
+            facilities.push(X25Facility::WindowSize {
+                from_called: self.send_window_size as u8,
+                from_calling: self.receive_window_size as u8,
+            });
+        }
+
+        facilities
     }
 }
 

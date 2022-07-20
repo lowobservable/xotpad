@@ -282,7 +282,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
             channel.clear_call(cause, Some(0)).await?;
         } else if called_address.starts_with(&self.address.to_string()) {
-            channel.accept_call().await?;
+            channel.accept_call(&call_request).await?;
 
             async_write!(self.writer, "\r\nCOM\r\n")?;
 
