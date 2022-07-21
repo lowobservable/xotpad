@@ -29,6 +29,7 @@ pub struct X25LogicalChannel {
     send_window_size: u16,
     send_queue: VecDeque<(Bytes, bool)>,
     send_sequence: u16,
+    send_window_lower_edge: u16,
 
     receive_max_packet_size: usize,
     receive_window_size: u16,
@@ -37,8 +38,7 @@ pub struct X25LogicalChannel {
     is_remote_ready: bool,
 
     // TODO: clean these up...
-    xxx_un_rrd_packets: u32,
-    xxx_lower_bound: u16,
+    xxx_un_rrd_packets: u16,
 }
 
 #[derive(Debug, PartialEq)]
@@ -69,12 +69,12 @@ impl X25LogicalChannel {
             send_window_size: DEFAULT_WINDOW_SIZE,
             send_queue: VecDeque::new(),
             send_sequence: 0,
+            send_window_lower_edge: 0,
             receive_max_packet_size: DEFAULT_MAX_PACKET_SIZE,
             receive_window_size: DEFAULT_WINDOW_SIZE,
             receive_sequence: 0,
             is_remote_ready: true,
             xxx_un_rrd_packets: 0,
-            xxx_lower_bound: 0,
         }
     }
 
@@ -212,7 +212,9 @@ impl X25LogicalChannel {
 
         self.send_queue.push_back((buffer, false));
 
-        self.xxx_send_all_that_i_can().await
+        self.send_queued().await?;
+
+        Ok(())
     }
 
     async fn receive_ready(&mut self) -> io::Result<()> {
@@ -247,12 +249,15 @@ impl X25LogicalChannel {
         self.send_packet(reset_confirmation).await
     }
 
-    async fn xxx_send_all_that_i_can(&mut self) -> io::Result<()> {
+    async fn send_queued(&mut self) -> io::Result<usize> {
         if self.state != X25LogicalChannelState::DataTransfer {
             panic!("invalid state"); // TODO
         }
 
-        let stop_sequence = (self.xxx_lower_bound + self.send_window_size) % (self.modulo as u16);
+        let stop_sequence =
+            (self.send_window_lower_edge + self.send_window_size) % (self.modulo as u16);
+
+        let mut count = 0;
 
         while !self.send_queue.is_empty()
             && self.is_remote_ready
@@ -279,9 +284,11 @@ impl X25LogicalChannel {
             if self.send_sequence == stop_sequence {
                 self.is_remote_ready = false;
             }
+
+            count += 1;
         }
 
-        Ok(())
+        Ok(count)
     }
 
     async fn send_packet(&mut self, packet: X25Packet) -> io::Result<()> {
@@ -355,29 +362,48 @@ impl X25LogicalChannel {
 
                     sequence_increment(&mut self.receive_sequence, self.modulo);
 
-                    self.xxx_lower_bound = data.receive_sequence;
+                    if !self.update_send_window(data.receive_sequence) {
+                        todo!("local procedure error");
+                    }
+
                     // We do NOT set self.is_remote_ready = true here, only RR and
                     // reset can do that!
 
-                    // TODO: clean this stuff up...
-                    self.xxx_un_rrd_packets += 1;
+                    // TODO: clean this stuff up... try and send anything we have
+                    // queued as that will send a P(R), if there isn't anything
+                    // queued then explicitly send a RR if necessary.
+                    match self.send_queued().await {
+                        Ok(count) => {
+                            if count == 0 {
+                                self.xxx_un_rrd_packets += 1;
 
-                    if self.xxx_un_rrd_packets >= 2 {
-                        if let Err(e) = self.receive_ready().await {
-                            return Some(Err(e));
+                                // Okay, now we have to do something...
+                                if self.xxx_un_rrd_packets >= self.receive_window_size {
+                                    if let Err(e) = self.receive_ready().await {
+                                        return Some(Err(e));
+                                    }
+                                }
+                            }
                         }
+                        Err(e) => return Some(Err(e)),
                     }
                 }
                 X25Packet::ReceiveReady(ref receive_ready) => {
-                    self.xxx_lower_bound = receive_ready.receive_sequence;
+                    if !self.update_send_window(receive_ready.receive_sequence) {
+                        todo!("local procedure error");
+                    }
+
                     self.is_remote_ready = true;
 
-                    if let Err(e) = self.xxx_send_all_that_i_can().await {
+                    if let Err(e) = self.send_queued().await {
                         return Some(Err(e));
                     }
                 }
                 X25Packet::ReceiveNotReady(ref receive_not_ready) => {
-                    self.xxx_lower_bound = receive_not_ready.receive_sequence;
+                    if !self.update_send_window(receive_not_ready.receive_sequence) {
+                        todo!("local procedure error");
+                    }
+
                     self.is_remote_ready = false;
                 }
                 X25Packet::ClearRequest(_) => {
@@ -398,8 +424,8 @@ impl X25LogicalChannel {
                     // TODO: move this to a function...
                     self.receive_sequence = 0;
                     self.send_sequence = 0;
+                    self.send_window_lower_edge = 0;
                     self.is_remote_ready = true;
-                    self.xxx_lower_bound = 0;
                     //self.xxx_un_rrd_packets: 0,
 
                     // TODO: do we need to resend anything?
@@ -416,8 +442,8 @@ impl X25LogicalChannel {
                     // TODO: move this to a function...
                     self.receive_sequence = 0;
                     self.send_sequence = 0;
+                    self.send_window_lower_edge = 0;
                     self.is_remote_ready = true;
-                    self.xxx_lower_bound = 0;
                     //self.xxx_un_rrd_packets: 0,
 
                     // TODO: do we need to resend anything?
@@ -429,8 +455,8 @@ impl X25LogicalChannel {
                     // TODO: move this to a function...
                     self.receive_sequence = 0;
                     self.send_sequence = 0;
+                    self.send_window_lower_edge = 0;
                     self.is_remote_ready = true;
-                    self.xxx_lower_bound = 0;
                     //self.xxx_un_rrd_packets: 0,
 
                     // TODO: do we need to resend anything?
@@ -451,6 +477,20 @@ impl X25LogicalChannel {
         // ^^^
 
         Some(Ok(packet))
+    }
+
+    fn update_send_window(&mut self, receive_sequence: u16) -> bool {
+        if !is_sequence_in_range(
+            receive_sequence,
+            self.send_window_lower_edge,
+            self.send_sequence,
+        ) {
+            return false;
+        }
+
+        self.send_window_lower_edge = receive_sequence;
+
+        true
     }
 
     fn adopt_facilities(&mut self, call_accepted: &X25CallAccepted) {
@@ -526,4 +566,20 @@ impl X25LogicalChannel {
 
 fn sequence_increment(sequence: &mut u16, modulo: X25Modulo) {
     *sequence = (*sequence + 1) % (modulo as u16);
+}
+
+fn is_sequence_in_range(sequence: u16, start: u16, end: u16) -> bool {
+    if start == end && sequence == start {
+        return true;
+    }
+
+    if start < end && sequence >= start && sequence <= end {
+        return true;
+    }
+
+    if start > end && (sequence >= start || sequence <= end) {
+        return true;
+    }
+
+    false
 }
