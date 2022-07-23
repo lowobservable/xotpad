@@ -179,25 +179,6 @@ impl X25LogicalChannel {
         Ok(())
     }
 
-    pub async fn reset(&mut self, cause: u8) -> io::Result<()> {
-        // TODO: states?
-
-        let reset_request = X25Packet::ResetRequest(X25ResetRequest {
-            modulo: self.modulo,
-            channel: 1,
-            cause,
-            diagnostic_code: None,
-        });
-
-        self.send_packet(reset_request).await?;
-
-        self.state = X25LogicalChannelState::AwaitingResetConfirmation;
-
-        // TODO: wait for the reset confirmation...
-
-        Ok(())
-    }
-
     pub async fn send_data(&mut self, mut buffer: Bytes) -> io::Result<()> {
         if self.state != X25LogicalChannelState::DataTransfer {
             panic!("invalid state"); // TODO
@@ -217,36 +198,25 @@ impl X25LogicalChannel {
         Ok(())
     }
 
-    async fn receive_ready(&mut self) -> io::Result<()> {
-        let receive_ready = X25Packet::ReceiveReady(X25ReceiveReady {
+    pub async fn reset(&mut self, cause: u8) -> io::Result<()> {
+        // TODO: states?
+
+        let reset_request = X25Packet::ResetRequest(X25ResetRequest {
             modulo: self.modulo,
             channel: 1,
-            receive_sequence: self.receive_sequence,
+            cause,
+            diagnostic_code: None,
         });
 
-        self.send_packet(receive_ready).await?;
+        self.send_packet(reset_request).await?;
 
-        self.xxx_un_rrd_packets = 0;
+        self.xxx_reset_state();
+
+        self.state = X25LogicalChannelState::AwaitingResetConfirmation;
+
+        // TODO: wait for the reset confirmation...
 
         Ok(())
-    }
-
-    async fn clear_confirmation(&mut self) -> io::Result<()> {
-        let clear_confirmation = X25Packet::ClearConfirmation(X25ClearConfirmation {
-            modulo: self.modulo,
-            channel: 1,
-        });
-
-        self.send_packet(clear_confirmation).await
-    }
-
-    async fn reset_confirmation(&mut self) -> io::Result<()> {
-        let reset_confirmation = X25Packet::ResetConfirmation(X25ResetConfirmation {
-            modulo: self.modulo,
-            channel: 1,
-        });
-
-        self.send_packet(reset_confirmation).await
     }
 
     async fn send_queued(&mut self) -> io::Result<usize> {
@@ -289,6 +259,38 @@ impl X25LogicalChannel {
         }
 
         Ok(count)
+    }
+
+    async fn receive_ready(&mut self) -> io::Result<()> {
+        let receive_ready = X25Packet::ReceiveReady(X25ReceiveReady {
+            modulo: self.modulo,
+            channel: 1,
+            receive_sequence: self.receive_sequence,
+        });
+
+        self.send_packet(receive_ready).await?;
+
+        self.xxx_un_rrd_packets = 0;
+
+        Ok(())
+    }
+
+    async fn clear_confirmation(&mut self) -> io::Result<()> {
+        let clear_confirmation = X25Packet::ClearConfirmation(X25ClearConfirmation {
+            modulo: self.modulo,
+            channel: 1,
+        });
+
+        self.send_packet(clear_confirmation).await
+    }
+
+    async fn reset_confirmation(&mut self) -> io::Result<()> {
+        let reset_confirmation = X25Packet::ResetConfirmation(X25ResetConfirmation {
+            modulo: self.modulo,
+            channel: 1,
+        });
+
+        self.send_packet(reset_confirmation).await
     }
 
     async fn send_packet(&mut self, packet: X25Packet) -> io::Result<()> {
@@ -421,12 +423,7 @@ impl X25LogicalChannel {
                         return Some(Err(e));
                     }
 
-                    // TODO: move this to a function...
-                    self.receive_sequence = 0;
-                    self.send_sequence = 0;
-                    self.send_window_lower_edge = 0;
-                    self.is_remote_ready = true;
-                    //self.xxx_un_rrd_packets: 0,
+                    self.xxx_reset_state();
 
                     // TODO: do we need to resend anything?
                 }
@@ -439,12 +436,7 @@ impl X25LogicalChannel {
                         return Some(Err(e));
                     }
 
-                    // TODO: move this to a function...
-                    self.receive_sequence = 0;
-                    self.send_sequence = 0;
-                    self.send_window_lower_edge = 0;
-                    self.is_remote_ready = true;
-                    //self.xxx_un_rrd_packets: 0,
+                    self.xxx_reset_state();
 
                     // TODO: do we need to resend anything?
 
@@ -452,12 +444,7 @@ impl X25LogicalChannel {
                 }
 
                 X25Packet::ResetConfirmation(_) => {
-                    // TODO: move this to a function...
-                    self.receive_sequence = 0;
-                    self.send_sequence = 0;
-                    self.send_window_lower_edge = 0;
-                    self.is_remote_ready = true;
-                    //self.xxx_un_rrd_packets: 0,
+                    self.xxx_reset_state();
 
                     // TODO: do we need to resend anything?
 
@@ -477,6 +464,14 @@ impl X25LogicalChannel {
         // ^^^
 
         Some(Ok(packet))
+    }
+
+    fn xxx_reset_state(&mut self) {
+        self.send_sequence = 0;
+        self.send_window_lower_edge = 0;
+        self.receive_sequence = 0;
+        self.is_remote_ready = true;
+        //self.xxx_un_rrd_packets: 0,
     }
 
     #[must_use]
