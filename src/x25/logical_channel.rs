@@ -278,7 +278,7 @@ impl X25LogicalChannel {
 
             self.send_packet(data).await?;
 
-            sequence_increment(&mut self.send_sequence, self.modulo);
+            self.send_sequence = (self.send_sequence + 1) % (self.modulo as u16);
 
             // TODO: should we do this?
             if self.send_sequence == stop_sequence {
@@ -358,9 +358,9 @@ impl X25LogicalChannel {
         } else if self.state == X25LogicalChannelState::DataTransfer {
             match packet {
                 X25Packet::Data(ref data) => {
-                    // TODO: validate the sequence...
-
-                    sequence_increment(&mut self.receive_sequence, self.modulo);
+                    if !self.update_receive_sequence(data.send_sequence) {
+                        todo!("local procedure error");
+                    }
 
                     if !self.update_send_window(data.receive_sequence) {
                         todo!("local procedure error");
@@ -479,6 +479,18 @@ impl X25LogicalChannel {
         Some(Ok(packet))
     }
 
+    #[must_use]
+    fn update_receive_sequence(&mut self, sequence: u16) -> bool {
+        if sequence != self.receive_sequence {
+            return false;
+        }
+
+        self.receive_sequence = (sequence + 1) % (self.modulo as u16);
+
+        true
+    }
+
+    #[must_use]
     fn update_send_window(&mut self, receive_sequence: u16) -> bool {
         if !is_sequence_in_range(
             receive_sequence,
@@ -562,10 +574,6 @@ impl X25LogicalChannel {
 
         facilities
     }
-}
-
-fn sequence_increment(sequence: &mut u16, modulo: X25Modulo) {
-    *sequence = (*sequence + 1) % (modulo as u16);
 }
 
 fn is_sequence_in_range(sequence: u16, start: u16, end: u16) -> bool {
