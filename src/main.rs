@@ -11,7 +11,7 @@ use tokio_util::codec::Framed;
 
 use xotpad::pad::{HostPad, UserPad};
 use xotpad::x121::X121Address;
-use xotpad::x25::{X25CallRequest, X25LogicalChannel, X25Modulo};
+use xotpad::x25::{X25CallRequest, X25Modulo, X25VirtualCircuit};
 use xotpad::xot;
 use xotpad::xot::{XotCodec, XotResolver};
 
@@ -70,16 +70,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             println!("got a connection from {}", tcp_address);
 
-            let xot_framed = Framed::new(tcp_stream, XotCodec::new());
+            let link = Framed::new(tcp_stream, XotCodec::new());
 
-            let mut channel = X25LogicalChannel::new(xot_framed, MODULO);
-
-            let call_request = channel.wait_for_call().await?;
+            let (mut circuit, call_request) =
+                X25VirtualCircuit::wait_for_call(link, MODULO).await?;
 
             let command = listen_table.lookup(&call_request);
 
             if command.is_none() {
-                channel.clear_call(0, Some(0)).await?;
+                circuit.clear_call(0, Some(0)).await?;
                 continue;
             }
 
@@ -93,9 +92,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let (a, b) = split(child.pty_mut());
 
-            channel.accept_call(&call_request).await?;
+            circuit.accept_call(&call_request).await?;
 
-            let pad = HostPad::new(a, b, channel);
+            let pad = HostPad::new(a, b, circuit);
 
             pad.run().await?;
 

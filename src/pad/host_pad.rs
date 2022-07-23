@@ -3,12 +3,12 @@ use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::select;
 
-use crate::x25::{X25LogicalChannel, X25Packet};
+use crate::x25::{X25Packet, X25VirtualCircuit};
 
 pub struct HostPad<R, W> {
     reader: BufReader<R>,
     writer: BufWriter<W>,
-    channel: X25LogicalChannel,
+    circuit: X25VirtualCircuit,
     data: BytesMut,
     is_running: bool,
 }
@@ -17,7 +17,7 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
     pub fn new(
         reader: R,
         writer: W,
-        channel: X25LogicalChannel,
+        circuit: X25VirtualCircuit,
         // TODO: X3Parameters,
     ) -> Self {
         // TODO: check channel state, must be ready...
@@ -25,7 +25,7 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
         Self {
             reader: BufReader::new(reader),
             writer: BufWriter::new(writer),
-            channel,
+            circuit,
             data: BytesMut::new(),
             is_running: false,
         }
@@ -44,14 +44,14 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
                             self.handle_host_output(&buffer[0..length]).await?
                         }
                         Err(_) => {
-                            self.channel.clear_call(0, Some(0)).await?; // TODO: cause?
+                            self.circuit.clear_call(0, Some(0)).await?; // TODO: cause?
 
                             self.is_running = false;
                         },
                     }
                 },
 
-                packet = self.channel.xxx_next() => {
+                packet = self.circuit.xxx_next() => {
                     match packet {
                         Some(Ok(packet)) => self.handle_packet(packet).await?,
                         Some(Err(error)) => panic!("{}", error),
@@ -94,7 +94,7 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
         // TODO: Does this make sense, do we check the last byte on host output?
         let data = self.data.clone().freeze();
 
-        self.channel.send_data(data).await?;
+        self.circuit.send_data(data).await?;
 
         self.data.clear();
 

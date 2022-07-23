@@ -20,9 +20,9 @@ const DEFAULT_MAX_PACKET_SIZE: usize = 128;
 const DEFAULT_WINDOW_SIZE: u16 = 2;
 
 // TODO: how can I get rid of the dependency on TcpStream and XotCodec here?
-pub struct X25LogicalChannel {
-    xot_framed: Framed<TcpStream, XotCodec>,
-    state: X25LogicalChannelState,
+pub struct X25VirtualCircuit {
+    link: Framed<TcpStream, XotCodec>,
+    state: X25VirtualCircuitState,
     modulo: X25Modulo,
 
     send_max_packet_size: usize,
@@ -42,7 +42,7 @@ pub struct X25LogicalChannel {
 }
 
 #[derive(Debug, PartialEq)]
-enum X25LogicalChannelState {
+enum X25VirtualCircuitState {
     // TODO: X.25 p1
     Ready,
 
@@ -59,11 +59,11 @@ enum X25LogicalChannelState {
     AwaitingClearConfirmation,
 }
 
-impl X25LogicalChannel {
-    pub fn new(xot_framed: Framed<TcpStream, XotCodec>, modulo: X25Modulo) -> Self {
+impl X25VirtualCircuit {
+    fn new(link: Framed<TcpStream, XotCodec>, modulo: X25Modulo) -> Self {
         Self {
-            xot_framed,
-            state: X25LogicalChannelState::Ready,
+            link,
+            state: X25VirtualCircuitState::Ready,
             modulo,
             send_max_packet_size: DEFAULT_MAX_PACKET_SIZE,
             send_window_size: DEFAULT_WINDOW_SIZE,
@@ -79,60 +79,70 @@ impl X25LogicalChannel {
     }
 
     pub async fn call(
-        &mut self,
+        link: Framed<TcpStream, XotCodec>,
+        modulo: X25Modulo,
         called_address: &X121Address,
         calling_address: &X121Address,
-    ) -> io::Result<X25Packet> {
-        if self.state != X25LogicalChannelState::Ready {
-            panic!("invalid state"); // TODO
-        }
+        call_user_data: &Bytes,
+    ) -> io::Result<Self> {
+        let mut virtual_circuit = Self::new(link, modulo);
 
         let facilities = vec![
             X25Facility::PacketSize {
-                from_called: self.receive_max_packet_size,
-                from_calling: self.send_max_packet_size,
+                from_called: virtual_circuit.receive_max_packet_size,
+                from_calling: virtual_circuit.send_max_packet_size,
             },
             X25Facility::WindowSize {
-                from_called: self.receive_window_size as u8,
-                from_calling: self.send_window_size as u8,
+                from_called: virtual_circuit.receive_window_size as u8,
+                from_calling: virtual_circuit.send_window_size as u8,
             },
         ];
 
         let call_request = X25Packet::CallRequest(X25CallRequest {
-            modulo: self.modulo,
+            modulo: virtual_circuit.modulo,
             channel: 1,
-            called_address: called_address.clone(), // TODO, can this be a ref?
+            called_address: called_address.clone(), // TODO, can these be refs?
             calling_address: calling_address.clone(),
             facilities,
-            call_user_data: Bytes::from_static(b"\x01\0\0\0"), // TODO
+            call_user_data: call_user_data.clone(),
         });
 
-        self.state = X25LogicalChannelState::AwaitingCallAccepted;
+        virtual_circuit.send_packet(call_request).await?;
 
-        // reset all the other things - maybe we just track them in data state?
+        virtual_circuit.state = X25VirtualCircuitState::AwaitingCallAccepted;
 
-        self.send_packet(call_request).await?;
+        let packet = virtual_circuit
+            .wait_for_packet(&[X25PacketType::CallAccepted, X25PacketType::ClearRequest])
+            .await?;
 
-        self.wait_for_packet(&[X25PacketType::CallAccepted, X25PacketType::ClearRequest])
-            .await
+        match packet {
+            X25Packet::CallAccepted(_) => Ok(virtual_circuit),
+            X25Packet::ClearRequest(_) => {
+                Err(io::Error::new(io::ErrorKind::ConnectionRefused, "TODO"))
+            }
+            _ => panic!("TODO"),
+        }
     }
 
-    pub async fn wait_for_call(&mut self) -> io::Result<X25CallRequest> {
-        if self.state != X25LogicalChannelState::Ready {
-            panic!("invalid state"); // TODO
-        }
+    pub async fn wait_for_call(
+        link: Framed<TcpStream, XotCodec>,
+        modulo: X25Modulo,
+    ) -> io::Result<(X25VirtualCircuit, X25CallRequest)> {
+        let mut virtual_circuit = Self::new(link, modulo);
 
-        let packet = self.wait_for_packet(&[X25PacketType::CallRequest]).await?;
+        let packet = virtual_circuit
+            .wait_for_packet(&[X25PacketType::CallRequest])
+            .await?;
 
         if let X25Packet::CallRequest(call_request) = packet {
-            return Ok(call_request);
+            return Ok((virtual_circuit, call_request));
         }
 
         panic!("TODO");
     }
 
     pub async fn accept_call(&mut self, call_request: &X25CallRequest) -> io::Result<()> {
-        if self.state != X25LogicalChannelState::AwaitingCallAccepted {
+        if self.state != X25VirtualCircuitState::AwaitingCallAccepted {
             panic!("invalid state"); // TODO
         }
 
@@ -148,7 +158,7 @@ impl X25LogicalChannel {
 
         self.send_packet(call_accepted).await?;
 
-        self.state = X25LogicalChannelState::DataTransfer;
+        self.state = X25VirtualCircuitState::DataTransfer;
 
         Ok(())
     }
@@ -167,10 +177,10 @@ impl X25LogicalChannel {
 
         self.send_packet(clear_request).await?;
 
-        if self.state == X25LogicalChannelState::AwaitingCallAccepted {
-            self.state = X25LogicalChannelState::Ready;
+        if self.state == X25VirtualCircuitState::AwaitingCallAccepted {
+            self.state = X25VirtualCircuitState::Ready;
         } else {
-            self.state = X25LogicalChannelState::AwaitingClearConfirmation;
+            self.state = X25VirtualCircuitState::AwaitingClearConfirmation;
 
             self.wait_for_packet(&[X25PacketType::ClearConfirmation])
                 .await?;
@@ -180,7 +190,7 @@ impl X25LogicalChannel {
     }
 
     pub async fn send_data(&mut self, mut buffer: Bytes) -> io::Result<()> {
-        if self.state != X25LogicalChannelState::DataTransfer {
+        if self.state != X25VirtualCircuitState::DataTransfer {
             panic!("invalid state"); // TODO
         }
 
@@ -212,7 +222,7 @@ impl X25LogicalChannel {
 
         self.xxx_reset_state();
 
-        self.state = X25LogicalChannelState::AwaitingResetConfirmation;
+        self.state = X25VirtualCircuitState::AwaitingResetConfirmation;
 
         // TODO: wait for the reset confirmation...
 
@@ -220,7 +230,7 @@ impl X25LogicalChannel {
     }
 
     async fn send_queued(&mut self) -> io::Result<usize> {
-        if self.state != X25LogicalChannelState::DataTransfer {
+        if self.state != X25VirtualCircuitState::DataTransfer {
             panic!("invalid state"); // TODO
         }
 
@@ -297,7 +307,7 @@ impl X25LogicalChannel {
         let buffer = format_packet(&packet)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
-        self.xot_framed.send(buffer).await
+        self.link.send(buffer).await
     }
 
     async fn wait_for_packet(&mut self, packet_types: &[X25PacketType]) -> io::Result<X25Packet> {
@@ -312,10 +322,10 @@ impl X25LogicalChannel {
         Err(io::Error::new(io::ErrorKind::ConnectionReset, "TODO"))
     }
 
-    // Uuh.. can this be moved into a impl Iterator for X25LogicalChannel?
+    // Uuh.. can this be moved into a impl Iterator for X25VirtualCircuit?
     // TODO: this needs to be something like x25::Result<X25State|X25Data??>
     pub async fn xxx_next(&mut self) -> Option<io::Result<X25Packet>> {
-        let packet = self.xot_framed.next().await;
+        let packet = self.link.next().await;
 
         // Unwrap the packet.
         let packet = match packet {
@@ -336,28 +346,28 @@ impl X25LogicalChannel {
         }
 
         // vvv
-        if self.state == X25LogicalChannelState::Ready {
+        if self.state == X25VirtualCircuitState::Ready {
             match packet {
                 X25Packet::CallRequest(_) => {
-                    self.state = X25LogicalChannelState::AwaitingCallAccepted;
+                    self.state = X25VirtualCircuitState::AwaitingCallAccepted;
                 }
                 _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
             }
-        } else if self.state == X25LogicalChannelState::AwaitingCallAccepted {
+        } else if self.state == X25VirtualCircuitState::AwaitingCallAccepted {
             match packet {
                 X25Packet::CallAccepted(ref call_accepted) => {
                     // Adopt the facilities provided by the other party.
                     self.adopt_facilities(call_accepted);
 
-                    self.state = X25LogicalChannelState::DataTransfer;
+                    self.state = X25VirtualCircuitState::DataTransfer;
                 }
                 X25Packet::ClearRequest(_) => {
-                    self.state = X25LogicalChannelState::Ready;
+                    self.state = X25VirtualCircuitState::Ready;
                 }
                 // TODO: Call collision...
                 _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
             }
-        } else if self.state == X25LogicalChannelState::DataTransfer {
+        } else if self.state == X25VirtualCircuitState::DataTransfer {
             match packet {
                 X25Packet::Data(ref data) => {
                     if !self.update_receive_sequence(data.send_sequence) {
@@ -416,7 +426,7 @@ impl X25LogicalChannel {
                         return Some(Err(e));
                     }
 
-                    self.state = X25LogicalChannelState::Ready;
+                    self.state = X25VirtualCircuitState::Ready;
                 }
                 X25Packet::ResetRequest(_) => {
                     if let Err(e) = self.reset_confirmation().await {
@@ -429,7 +439,7 @@ impl X25LogicalChannel {
                 }
                 _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
             }
-        } else if self.state == X25LogicalChannelState::AwaitingResetConfirmation {
+        } else if self.state == X25VirtualCircuitState::AwaitingResetConfirmation {
             match packet {
                 X25Packet::ResetRequest(_) => {
                     if let Err(e) = self.reset_confirmation().await {
@@ -440,7 +450,7 @@ impl X25LogicalChannel {
 
                     // TODO: do we need to resend anything?
 
-                    self.state = X25LogicalChannelState::DataTransfer;
+                    self.state = X25VirtualCircuitState::DataTransfer;
                 }
 
                 X25Packet::ResetConfirmation(_) => {
@@ -448,15 +458,15 @@ impl X25LogicalChannel {
 
                     // TODO: do we need to resend anything?
 
-                    self.state = X25LogicalChannelState::DataTransfer;
+                    self.state = X25VirtualCircuitState::DataTransfer;
                 }
                 // TODO: ClearRequest is valid here...
                 _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
             }
-        } else if self.state == X25LogicalChannelState::AwaitingClearConfirmation {
+        } else if self.state == X25VirtualCircuitState::AwaitingClearConfirmation {
             match packet {
                 X25Packet::ClearConfirmation(_) => {
-                    self.state = X25LogicalChannelState::Ready;
+                    self.state = X25VirtualCircuitState::Ready;
                 }
                 _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
             }

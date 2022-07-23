@@ -1,4 +1,4 @@
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
@@ -6,7 +6,7 @@ use tokio::select;
 use tokio_util::codec::Framed;
 
 use crate::x121::X121Address;
-use crate::x25::{X25CallRequest, X25LogicalChannel, X25Modulo, X25Packet};
+use crate::x25::{X25CallRequest, X25Modulo, X25Packet, X25VirtualCircuit};
 use crate::xot;
 use crate::xot::{XotCodec, XotResolver};
 
@@ -36,7 +36,7 @@ pub struct UserPad<'a, R, W> {
     modulo: X25Modulo,
     address: &'a X121Address,
     xot_resolver: &'a XotResolver,
-    channel: Option<X25LogicalChannel>,
+    circuit: Option<X25VirtualCircuit>,
     listener: Option<TcpListener>,
     command: String,
     data: BytesMut,
@@ -68,7 +68,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
             modulo,
             address,
             xot_resolver,
-            channel: None,
+            circuit: None,
             listener,
             command: String::new(),
             data: BytesMut::new(),
@@ -88,34 +88,39 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
         let tcp_stream = TcpStream::connect((xot_gateway, xot::TCP_PORT)).await?;
 
-        let xot_framed = Framed::new(tcp_stream, XotCodec::new());
+        let link = Framed::new(tcp_stream, XotCodec::new());
 
-        let mut channel = X25LogicalChannel::new(xot_framed, self.modulo);
+        let call_user_data = Bytes::from_static(b"\x01\0\0\0");
 
-        let packet = channel.call(address, self.address).await?;
+        let circuit =
+            X25VirtualCircuit::call(link, self.modulo, address, self.address, &call_user_data)
+                .await;
 
-        match packet {
-            X25Packet::CallAccepted(_) => {
+        match circuit {
+            Ok(circuit) => {
                 async_write!(self.writer, "COM\r\n")?;
 
-                self.channel = Some(channel);
+                self.circuit = Some(circuit);
 
                 self.switch_to_data_mode()?;
             }
-            X25Packet::ClearRequest(clear_request) => {
+            Err(_) => {
+                /*
                 let cause = clear_request.cause;
                 let diagnostic_code = clear_request.diagnostic_code.unwrap_or(0);
+                */
+                let cause = 123;
+                let diagnostic_code = 456;
 
                 async_write!(self.writer, "CLR XXX C:{} D:{}\r\n", cause, diagnostic_code)?;
             }
-            _ => panic!(),
         }
 
         Ok(())
     }
 
     async fn clear(&mut self) -> io::Result<()> {
-        self.channel
+        self.circuit
             .as_mut()
             .unwrap()
             .clear_call(0, Some(0))
@@ -124,8 +129,8 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         async_write!(self.writer, "CLR CONF\r\n")?;
 
         // Okay, so we will have sent the clear confirmation so we
-        // can try and close the channel now?
-        self.channel = None;
+        // can try and close the circuit now?
+        self.circuit = None;
 
         self.data.clear();
 
@@ -150,12 +155,12 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
                     }
                 },
 
-                packet = read_packet(self.channel.as_mut(), is_in_data_state) => {
+                packet = read_packet(self.circuit.as_mut(), is_in_data_state) => {
                     match packet {
                         Some(Ok(packet)) => self.handle_packet(packet).await?,
                         Some(Err(error)) => panic!("{}", error),
                         None => {
-                            self.channel = None;
+                            self.circuit = None;
 
                             if self.xxx_one_shot {
                                 break;
@@ -168,9 +173,9 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
                 // TODO: really, this needs to go in a separate thread so it
                 // does not block while we are trying to accept the call...
-                call_request = wait_for_call(self.modulo, &mut self.listener, true) => {
-                    match call_request {
-                        Ok((channel, call_request)) => self.handle_incoming_call(channel, call_request).await?,
+                call = wait_for_call(self.modulo, &mut self.listener, true) => {
+                    match call {
+                        Ok((circuit, call_request)) => self.handle_incoming_call(circuit, call_request).await?,
                         Err(error) => panic!("{}", error),
                     }
                 },
@@ -183,7 +188,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
     }
 
     async fn handle_user_input(&mut self, byte: u8) -> io::Result<()> {
-        let mut is_connected = self.channel.is_some();
+        let mut is_connected = self.circuit.is_some();
 
         match self.state {
             UserPadState::Command => {
@@ -204,7 +209,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
                         self.command.clear();
 
                         // This could have changed, if we executed a command...
-                        is_connected = self.channel.is_some();
+                        is_connected = self.circuit.is_some();
                     } else if !is_connected {
                         async_write!(self.writer, "\r\n")?;
                     }
@@ -257,8 +262,8 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
                 )?;
 
                 // Okay, so we will have sent the clear confirmation so we
-                // can try and close the channel now?
-                self.channel = None;
+                // can try and close the circuit now?
+                self.circuit = None;
 
                 self.data.clear();
 
@@ -272,26 +277,26 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
     async fn handle_incoming_call(
         &mut self,
-        mut channel: X25LogicalChannel,
+        mut circuit: X25VirtualCircuit,
         call_request: X25CallRequest,
     ) -> io::Result<()> {
         let called_address = call_request.called_address.to_string();
 
-        if self.channel.is_some() {
+        if self.circuit.is_some() {
             let cause = 1; // "OCC" - number busy
 
-            channel.clear_call(cause, Some(0)).await?;
+            circuit.clear_call(cause, Some(0)).await?;
         } else if called_address.starts_with(&self.address.to_string()) {
-            channel.accept_call(&call_request).await?;
+            circuit.accept_call(&call_request).await?;
 
             async_write!(self.writer, "\r\nCOM\r\n")?;
 
-            self.channel = Some(channel);
+            self.circuit = Some(circuit);
             self.switch_to_data_mode()?;
         } else {
             let cause = 0; // TODO: what should this be?
 
-            channel.clear_call(cause, Some(0)).await?;
+            circuit.clear_call(cause, Some(0)).await?;
         }
 
         Ok(())
@@ -317,7 +322,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
         match parse_command_line(line) {
             Some((UserPadCommand::Call, args)) => {
-                if self.channel.is_some() {
+                if self.circuit.is_some() {
                     async_write!(self.writer, "ERR\r\n\r\n")?;
                 } else {
                     let address: X121Address = args[0].parse().unwrap();
@@ -326,24 +331,24 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
                 }
             }
             Some((UserPadCommand::Clear, _)) => {
-                if self.channel.is_none() {
+                if self.circuit.is_none() {
                     async_write!(self.writer, "ERR\r\n\r\n")?;
                 } else {
                     self.clear().await?;
                 }
             }
             Some((UserPadCommand::Reset, _)) => {
-                if self.channel.is_none() {
+                if self.circuit.is_none() {
                     async_write!(self.writer, "ERR\r\n\r\n")?;
                 } else {
-                    self.channel.as_mut().unwrap().reset(0).await?;
+                    self.circuit.as_mut().unwrap().reset(0).await?;
 
                     // TODO: is this correct, we wait for conf. before we
                     // indicate RESET?
                 }
             }
             Some((UserPadCommand::Status, _)) => {
-                if self.channel.is_some() {
+                if self.circuit.is_some() {
                     async_write!(self.writer, "ENGAGED\r\n\r\n")?;
                 } else {
                     async_write!(self.writer, "FREE\r\n\r\n")?;
@@ -373,7 +378,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         if true {
             let data = self.data.clone().freeze();
 
-            self.channel.as_mut().unwrap().send_data(data).await?;
+            self.circuit.as_mut().unwrap().send_data(data).await?;
 
             self.data.clear();
         }
@@ -386,33 +391,29 @@ async fn wait_for_call(
     modulo: X25Modulo,
     listener: &mut Option<TcpListener>,
     enable: bool,
-) -> io::Result<(X25LogicalChannel, X25CallRequest)> {
+) -> io::Result<(X25VirtualCircuit, X25CallRequest)> {
     if listener.is_none() || !enable {
         return futures::future::pending().await;
     }
 
     let (tcp_stream, _tcp_address) = listener.as_ref().unwrap().accept().await?;
 
-    let xot_framed = Framed::new(tcp_stream, XotCodec::new());
+    let link = Framed::new(tcp_stream, XotCodec::new());
 
-    let mut channel = X25LogicalChannel::new(xot_framed, modulo);
-
-    let call_request = channel.wait_for_call().await?;
-
-    Ok((channel, call_request))
+    X25VirtualCircuit::wait_for_call(link, modulo).await
 }
 
 async fn read_packet(
-    channel: Option<&mut X25LogicalChannel>,
+    circuit: Option<&mut X25VirtualCircuit>,
     enable: bool,
 ) -> Option<io::Result<X25Packet>> {
     // TODO: would it be better to run select on a list that ONLY contains
     // the sources we are interested in - instead of this "dummy" future?
-    if channel.is_none() || !enable {
+    if circuit.is_none() || !enable {
         return futures::future::pending().await;
     }
 
-    channel.unwrap().xxx_next().await
+    circuit.unwrap().xxx_next().await
 }
 
 // ...
