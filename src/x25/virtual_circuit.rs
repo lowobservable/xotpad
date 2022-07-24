@@ -208,14 +208,14 @@ impl X25VirtualCircuit {
         Ok(())
     }
 
-    pub async fn reset(&mut self, cause: u8) -> io::Result<()> {
+    pub async fn reset(&mut self, cause: u8, diagnostic_code: Option<u8>) -> io::Result<()> {
         // TODO: states?
 
         let reset_request = X25Packet::ResetRequest(X25ResetRequest {
             modulo: self.modulo,
             channel: 1,
             cause,
-            diagnostic_code: None,
+            diagnostic_code,
         });
 
         self.send_packet(reset_request).await?;
@@ -325,155 +325,169 @@ impl X25VirtualCircuit {
     // Uuh.. can this be moved into a impl Iterator for X25VirtualCircuit?
     // TODO: this needs to be something like x25::Result<X25State|X25Data??>
     pub async fn xxx_next(&mut self) -> Option<io::Result<X25Packet>> {
-        let packet = self.link.next().await;
+        loop {
+            let packet = self.link.next().await;
 
-        // Unwrap the packet.
-        let packet = match packet {
-            None => return None,
-            Some(Ok(p)) => p,
-            Some(Err(e)) => return Some(Err(e)),
-        };
+            // Unwrap the packet.
+            let packet = match packet {
+                None => return None,
+                Some(Ok(p)) => p,
+                Some(Err(e)) => return Some(Err(e)),
+            };
 
-        // Parse the packet.
-        let packet = match parse_packet(packet) {
-            Ok(p) => p,
-            Err(_) => return Some(Err(io::Error::new(io::ErrorKind::InvalidData, "TODO"))),
-        };
+            // Parse the packet.
+            let packet = match parse_packet(packet) {
+                Ok(p) => p,
+                Err(_) => return Some(Err(io::Error::new(io::ErrorKind::InvalidData, "TODO"))),
+            };
 
-        //
-        if packet.modulo() != self.modulo {
-            todo!("XXX");
-        }
-
-        // vvv
-        if self.state == X25VirtualCircuitState::Ready {
-            match packet {
-                X25Packet::CallRequest(_) => {
-                    self.state = X25VirtualCircuitState::AwaitingCallAccepted;
-                }
-                _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
+            //
+            if packet.modulo() != self.modulo {
+                todo!("XXX");
             }
-        } else if self.state == X25VirtualCircuitState::AwaitingCallAccepted {
-            match packet {
-                X25Packet::CallAccepted(ref call_accepted) => {
-                    // Adopt the facilities provided by the other party.
-                    self.adopt_facilities(call_accepted);
 
-                    self.state = X25VirtualCircuitState::DataTransfer;
-                }
-                X25Packet::ClearRequest(_) => {
-                    self.state = X25VirtualCircuitState::Ready;
-                }
-                // TODO: Call collision...
-                _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
-            }
-        } else if self.state == X25VirtualCircuitState::DataTransfer {
-            match packet {
-                X25Packet::Data(ref data) => {
-                    if !self.update_receive_sequence(data.send_sequence) {
-                        todo!("local procedure error");
+            // vvv
+            if self.state == X25VirtualCircuitState::Ready {
+                match packet {
+                    X25Packet::CallRequest(_) => {
+                        self.state = X25VirtualCircuitState::AwaitingCallAccepted;
                     }
+                    _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
+                }
+            } else if self.state == X25VirtualCircuitState::AwaitingCallAccepted {
+                match packet {
+                    X25Packet::CallAccepted(ref call_accepted) => {
+                        // Adopt the facilities provided by the other party.
+                        self.adopt_facilities(call_accepted);
 
-                    if !self.update_send_window(data.receive_sequence) {
-                        todo!("local procedure error");
+                        self.state = X25VirtualCircuitState::DataTransfer;
                     }
+                    X25Packet::ClearRequest(_) => {
+                        self.state = X25VirtualCircuitState::Ready;
+                    }
+                    // TODO: Call collision...
+                    _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
+                }
+            } else if self.state == X25VirtualCircuitState::DataTransfer {
+                match packet {
+                    X25Packet::Data(ref data) => {
+                        if !self.update_receive_sequence(data.send_sequence) {
+                            if let Err(e) = self.reset(0x05, Some(0x01)).await {
+                                return Some(Err(e));
+                            }
+                            continue;
+                        }
 
-                    // We do NOT set self.is_remote_ready = true here, only RR and
-                    // reset can do that!
+                        if !self.update_send_window(data.receive_sequence) {
+                            if let Err(e) = self.reset(0x0b, Some(0x02)).await {
+                                return Some(Err(e));
+                            }
+                            continue;
+                        }
 
-                    // TODO: clean this stuff up... try and send anything we have
-                    // queued as that will send a P(R), if there isn't anything
-                    // queued then explicitly send a RR if necessary.
-                    match self.send_queued().await {
-                        Ok(count) => {
-                            if count == 0 {
-                                self.xxx_un_rrd_packets += 1;
+                        // We do NOT set self.is_remote_ready = true here, only RR and
+                        // reset can do that!
 
-                                // Okay, now we have to do something...
-                                if self.xxx_un_rrd_packets >= self.receive_window_size {
-                                    if let Err(e) = self.receive_ready().await {
-                                        return Some(Err(e));
+                        // TODO: clean this stuff up... try and send anything we have
+                        // queued as that will send a P(R), if there isn't anything
+                        // queued then explicitly send a RR if necessary.
+                        match self.send_queued().await {
+                            Ok(count) => {
+                                if count == 0 {
+                                    self.xxx_un_rrd_packets += 1;
+
+                                    // Okay, now we have to do something...
+                                    if self.xxx_un_rrd_packets >= self.receive_window_size {
+                                        if let Err(e) = self.receive_ready().await {
+                                            return Some(Err(e));
+                                        }
                                     }
                                 }
                             }
+                            Err(e) => return Some(Err(e)),
                         }
-                        Err(e) => return Some(Err(e)),
                     }
+                    X25Packet::ReceiveReady(ref receive_ready) => {
+                        if !self.update_send_window(receive_ready.receive_sequence) {
+                            if let Err(e) = self.reset(0x0b, Some(0x02)).await {
+                                return Some(Err(e));
+                            }
+                            continue;
+                        }
+
+                        self.is_remote_ready = true;
+
+                        if let Err(e) = self.send_queued().await {
+                            return Some(Err(e));
+                        }
+                    }
+                    X25Packet::ReceiveNotReady(ref receive_not_ready) => {
+                        if !self.update_send_window(receive_not_ready.receive_sequence) {
+                            if let Err(e) = self.reset(0x0b, Some(0x02)).await {
+                                return Some(Err(e));
+                            }
+                            continue;
+                        }
+
+                        self.is_remote_ready = false;
+                    }
+                    X25Packet::ClearRequest(_) => {
+                        // TODO: not sure about this, we should move into a clearing
+                        // state, but maybe not that doesn't make sense if all we
+                        // are going to do is send a clear confirmation...
+                        if let Err(e) = self.clear_confirmation().await {
+                            return Some(Err(e));
+                        }
+
+                        self.state = X25VirtualCircuitState::Ready;
+                    }
+                    X25Packet::ResetRequest(_) => {
+                        if let Err(e) = self.reset_confirmation().await {
+                            return Some(Err(e));
+                        }
+
+                        self.xxx_reset_state();
+
+                        // TODO: do we need to resend anything?
+                    }
+                    _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
                 }
-                X25Packet::ReceiveReady(ref receive_ready) => {
-                    if !self.update_send_window(receive_ready.receive_sequence) {
-                        todo!("local procedure error");
+            } else if self.state == X25VirtualCircuitState::AwaitingResetConfirmation {
+                match packet {
+                    X25Packet::ResetRequest(_) => {
+                        if let Err(e) = self.reset_confirmation().await {
+                            return Some(Err(e));
+                        }
+
+                        self.xxx_reset_state();
+
+                        // TODO: do we need to resend anything?
+
+                        self.state = X25VirtualCircuitState::DataTransfer;
                     }
 
-                    self.is_remote_ready = true;
+                    X25Packet::ResetConfirmation(_) => {
+                        self.xxx_reset_state();
 
-                    if let Err(e) = self.send_queued().await {
-                        return Some(Err(e));
+                        // TODO: do we need to resend anything?
+
+                        self.state = X25VirtualCircuitState::DataTransfer;
                     }
+                    // TODO: ClearRequest is valid here...
+                    _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
                 }
-                X25Packet::ReceiveNotReady(ref receive_not_ready) => {
-                    if !self.update_send_window(receive_not_ready.receive_sequence) {
-                        todo!("local procedure error");
+            } else if self.state == X25VirtualCircuitState::AwaitingClearConfirmation {
+                match packet {
+                    X25Packet::ClearConfirmation(_) => {
+                        self.state = X25VirtualCircuitState::Ready;
                     }
-
-                    self.is_remote_ready = false;
+                    _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
                 }
-                X25Packet::ClearRequest(_) => {
-                    // TODO: not sure about this, we should move into a clearing
-                    // state, but maybe not that doesn't make sense if all we
-                    // are going to do is send a clear confirmation...
-                    if let Err(e) = self.clear_confirmation().await {
-                        return Some(Err(e));
-                    }
-
-                    self.state = X25VirtualCircuitState::Ready;
-                }
-                X25Packet::ResetRequest(_) => {
-                    if let Err(e) = self.reset_confirmation().await {
-                        return Some(Err(e));
-                    }
-
-                    self.xxx_reset_state();
-
-                    // TODO: do we need to resend anything?
-                }
-                _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
             }
-        } else if self.state == X25VirtualCircuitState::AwaitingResetConfirmation {
-            match packet {
-                X25Packet::ResetRequest(_) => {
-                    if let Err(e) = self.reset_confirmation().await {
-                        return Some(Err(e));
-                    }
+            // ^^^
 
-                    self.xxx_reset_state();
-
-                    // TODO: do we need to resend anything?
-
-                    self.state = X25VirtualCircuitState::DataTransfer;
-                }
-
-                X25Packet::ResetConfirmation(_) => {
-                    self.xxx_reset_state();
-
-                    // TODO: do we need to resend anything?
-
-                    self.state = X25VirtualCircuitState::DataTransfer;
-                }
-                // TODO: ClearRequest is valid here...
-                _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
-            }
-        } else if self.state == X25VirtualCircuitState::AwaitingClearConfirmation {
-            match packet {
-                X25Packet::ClearConfirmation(_) => {
-                    self.state = X25VirtualCircuitState::Ready;
-                }
-                _ => todo!("state = {:?}, packet = {:?}", self.state, packet),
-            }
+            return Some(Ok(packet));
         }
-        // ^^^
-
-        Some(Ok(packet))
     }
 
     fn xxx_reset_state(&mut self) {

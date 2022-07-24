@@ -341,7 +341,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
                 if self.circuit.is_none() {
                     async_write!(self.writer, "ERR\r\n\r\n")?;
                 } else {
-                    self.circuit.as_mut().unwrap().reset(0).await?;
+                    self.circuit.as_mut().unwrap().reset(0, Some(0)).await?;
 
                     // TODO: is this correct, we wait for conf. before we
                     // indicate RESET?
