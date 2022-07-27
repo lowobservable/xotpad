@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let (a, b) = split(child.pty_mut());
 
-            circuit.accept_call(&call_request).await?;
+            circuit.accept_call().await?;
 
             let pad = HostPad::new(a, b, circuit);
 

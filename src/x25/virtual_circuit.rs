@@ -25,6 +25,8 @@ pub struct X25VirtualCircuit {
     state: X25VirtualCircuitState,
     modulo: X25Modulo,
 
+    call_request: Option<X25CallRequest>,
+
     send_max_packet_size: usize,
     send_window_size: u16,
     send_queue: VecDeque<(Bytes, bool)>,
@@ -65,6 +67,7 @@ impl X25VirtualCircuit {
             link,
             state: X25VirtualCircuitState::Ready,
             modulo,
+            call_request: None,
             send_max_packet_size: DEFAULT_MAX_PACKET_SIZE,
             send_window_size: DEFAULT_WINDOW_SIZE,
             send_queue: VecDeque::new(),
@@ -98,17 +101,20 @@ impl X25VirtualCircuit {
             },
         ];
 
-        let call_request = X25Packet::CallRequest(X25CallRequest {
+        let call_request = X25CallRequest {
             modulo: virtual_circuit.modulo,
             channel: 1,
             called_address: called_address.clone(), // TODO, can these be refs?
             calling_address: calling_address.clone(),
             facilities,
             call_user_data: call_user_data.clone(),
-        });
+        };
 
-        virtual_circuit.send_packet(call_request).await?;
+        let packet = X25Packet::CallRequest(call_request.clone());
 
+        virtual_circuit.send_packet(packet).await?;
+
+        virtual_circuit.call_request = Some(call_request);
         virtual_circuit.state = X25VirtualCircuitState::AwaitingCallAccepted;
 
         let packet = virtual_circuit
@@ -135,20 +141,24 @@ impl X25VirtualCircuit {
             .await?;
 
         if let X25Packet::CallRequest(call_request) = packet {
+            virtual_circuit.call_request = Some(call_request.clone());
+
             return Ok((virtual_circuit, call_request));
         }
 
         panic!("TODO");
     }
 
-    pub async fn accept_call(&mut self, call_request: &X25CallRequest) -> io::Result<()> {
+    pub async fn accept_call(&mut self) -> io::Result<()> {
         if self.state != X25VirtualCircuitState::AwaitingCallAccepted {
             panic!("invalid state"); // TODO
         }
 
-        let facilities = self.negotiate_facilities(call_request);
+        let call_request = self.call_request.take().expect("TODO");
 
-        let call_accepted = X25Packet::CallAccepted(X25CallAccepted {
+        let facilities = self.negotiate_facilities(&call_request);
+
+        let packet = X25Packet::CallAccepted(X25CallAccepted {
             modulo: self.modulo,
             channel: 1,
             called_address: X121Address::from_str("").unwrap(),
@@ -156,7 +166,7 @@ impl X25VirtualCircuit {
             facilities,
         });
 
-        self.send_packet(call_accepted).await?;
+        self.send_packet(packet).await?;
 
         self.state = X25VirtualCircuitState::DataTransfer;
 
@@ -166,7 +176,7 @@ impl X25VirtualCircuit {
     pub async fn clear_call(&mut self, cause: u8, diagnostic_code: Option<u8>) -> io::Result<()> {
         // TODO: states?
 
-        let clear_request = X25Packet::ClearRequest(X25ClearRequest {
+        let packet = X25Packet::ClearRequest(X25ClearRequest {
             modulo: self.modulo,
             channel: 1,
             cause,
@@ -175,7 +185,9 @@ impl X25VirtualCircuit {
 
         // TODO: reset some things, right?
 
-        self.send_packet(clear_request).await?;
+        self.send_packet(packet).await?;
+
+        self.call_request = None;
 
         if self.state == X25VirtualCircuitState::AwaitingCallAccepted {
             self.state = X25VirtualCircuitState::Ready;
@@ -211,14 +223,14 @@ impl X25VirtualCircuit {
     pub async fn reset(&mut self, cause: u8, diagnostic_code: Option<u8>) -> io::Result<()> {
         // TODO: states?
 
-        let reset_request = X25Packet::ResetRequest(X25ResetRequest {
+        let packet = X25Packet::ResetRequest(X25ResetRequest {
             modulo: self.modulo,
             channel: 1,
             cause,
             diagnostic_code,
         });
 
-        self.send_packet(reset_request).await?;
+        self.send_packet(packet).await?;
 
         self.xxx_reset_state();
 
@@ -245,7 +257,7 @@ impl X25VirtualCircuit {
         {
             let (buffer, more_data) = self.send_queue.pop_front().unwrap();
 
-            let data = X25Packet::Data(X25Data {
+            let packet = X25Packet::Data(X25Data {
                 modulo: self.modulo,
                 channel: 1,
                 qualifier: false,
@@ -256,7 +268,7 @@ impl X25VirtualCircuit {
                 buffer,
             });
 
-            self.send_packet(data).await?;
+            self.send_packet(packet).await?;
 
             self.send_sequence = (self.send_sequence + 1) % (self.modulo as u16);
 
@@ -272,13 +284,13 @@ impl X25VirtualCircuit {
     }
 
     async fn receive_ready(&mut self) -> io::Result<()> {
-        let receive_ready = X25Packet::ReceiveReady(X25ReceiveReady {
+        let packet = X25Packet::ReceiveReady(X25ReceiveReady {
             modulo: self.modulo,
             channel: 1,
             receive_sequence: self.receive_sequence,
         });
 
-        self.send_packet(receive_ready).await?;
+        self.send_packet(packet).await?;
 
         self.xxx_un_rrd_packets = 0;
 
@@ -286,21 +298,21 @@ impl X25VirtualCircuit {
     }
 
     async fn clear_confirmation(&mut self) -> io::Result<()> {
-        let clear_confirmation = X25Packet::ClearConfirmation(X25ClearConfirmation {
+        let packet = X25Packet::ClearConfirmation(X25ClearConfirmation {
             modulo: self.modulo,
             channel: 1,
         });
 
-        self.send_packet(clear_confirmation).await
+        self.send_packet(packet).await
     }
 
     async fn reset_confirmation(&mut self) -> io::Result<()> {
-        let reset_confirmation = X25Packet::ResetConfirmation(X25ResetConfirmation {
+        let packet = X25Packet::ResetConfirmation(X25ResetConfirmation {
             modulo: self.modulo,
             channel: 1,
         });
 
-        self.send_packet(reset_confirmation).await
+        self.send_packet(packet).await
     }
 
     async fn send_packet(&mut self, packet: X25Packet) -> io::Result<()> {
@@ -349,7 +361,9 @@ impl X25VirtualCircuit {
             // vvv
             if self.state == X25VirtualCircuitState::Ready {
                 match packet {
-                    X25Packet::CallRequest(_) => {
+                    X25Packet::CallRequest(ref call_request) => {
+                        self.call_request = Some(call_request.clone());
+
                         self.state = X25VirtualCircuitState::AwaitingCallAccepted;
                     }
                     _ => todo!("state = {:?}, packet = {:?}", self.state, packet),

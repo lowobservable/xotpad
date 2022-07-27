@@ -88,7 +88,7 @@ impl X25Packet {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct X25CallRequest {
     pub modulo: X25Modulo,
     pub channel: u16,

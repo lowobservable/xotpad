@@ -287,7 +287,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
             circuit.clear_call(cause, Some(0)).await?;
         } else if called_address.starts_with(&self.address.to_string()) {
-            circuit.accept_call(&call_request).await?;
+            circuit.accept_call().await?;
 
             async_write!(self.writer, "\r\nCOM\r\n")?;
 
