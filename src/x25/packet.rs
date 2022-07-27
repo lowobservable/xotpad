@@ -88,6 +88,66 @@ impl X25Packet {
     }
 }
 
+impl From<X25CallRequest> for X25Packet {
+    fn from(call_request: X25CallRequest) -> X25Packet {
+        X25Packet::CallRequest(call_request)
+    }
+}
+
+impl From<X25CallAccepted> for X25Packet {
+    fn from(call_accepted: X25CallAccepted) -> X25Packet {
+        X25Packet::CallAccepted(call_accepted)
+    }
+}
+
+impl From<X25ClearRequest> for X25Packet {
+    fn from(clear_request: X25ClearRequest) -> X25Packet {
+        X25Packet::ClearRequest(clear_request)
+    }
+}
+
+impl From<X25ClearConfirmation> for X25Packet {
+    fn from(clear_confirmation: X25ClearConfirmation) -> X25Packet {
+        X25Packet::ClearConfirmation(clear_confirmation)
+    }
+}
+
+impl From<X25Data> for X25Packet {
+    fn from(data: X25Data) -> X25Packet {
+        X25Packet::Data(data)
+    }
+}
+
+impl From<X25ReceiveReady> for X25Packet {
+    fn from(receive_ready: X25ReceiveReady) -> X25Packet {
+        X25Packet::ReceiveReady(receive_ready)
+    }
+}
+
+impl From<X25ReceiveNotReady> for X25Packet {
+    fn from(receive_not_ready: X25ReceiveNotReady) -> X25Packet {
+        X25Packet::ReceiveNotReady(receive_not_ready)
+    }
+}
+
+impl From<X25ResetRequest> for X25Packet {
+    fn from(reset_request: X25ResetRequest) -> X25Packet {
+        X25Packet::ResetRequest(reset_request)
+    }
+}
+
+impl From<X25ResetConfirmation> for X25Packet {
+    fn from(reset_confirmation: X25ResetConfirmation) -> X25Packet {
+        X25Packet::ResetConfirmation(reset_confirmation)
+    }
+}
+
+impl From<X25Diagnostic> for X25Packet {
+    fn from(diagnostic: X25Diagnostic) -> X25Packet {
+        X25Packet::Diagnostic(diagnostic)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct X25CallRequest {
     pub modulo: X25Modulo,

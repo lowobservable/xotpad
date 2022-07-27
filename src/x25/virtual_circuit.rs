@@ -110,9 +110,7 @@ impl X25VirtualCircuit {
             call_user_data: call_user_data.clone(),
         };
 
-        let packet = X25Packet::CallRequest(call_request.clone());
-
-        virtual_circuit.send_packet(packet).await?;
+        virtual_circuit.send_packet(call_request.clone()).await?;
 
         virtual_circuit.call_request = Some(call_request);
         virtual_circuit.state = X25VirtualCircuitState::AwaitingCallAccepted;
@@ -158,15 +156,15 @@ impl X25VirtualCircuit {
 
         let facilities = self.negotiate_facilities(&call_request);
 
-        let packet = X25Packet::CallAccepted(X25CallAccepted {
+        let call_accepted = X25CallAccepted {
             modulo: self.modulo,
             channel: 1,
             called_address: X121Address::from_str("").unwrap(),
             calling_address: X121Address::from_str("").unwrap(),
             facilities,
-        });
+        };
 
-        self.send_packet(packet).await?;
+        self.send_packet(call_accepted).await?;
 
         self.state = X25VirtualCircuitState::DataTransfer;
 
@@ -176,16 +174,16 @@ impl X25VirtualCircuit {
     pub async fn clear_call(&mut self, cause: u8, diagnostic_code: Option<u8>) -> io::Result<()> {
         // TODO: states?
 
-        let packet = X25Packet::ClearRequest(X25ClearRequest {
+        let clear_request = X25ClearRequest {
             modulo: self.modulo,
             channel: 1,
             cause,
             diagnostic_code,
-        });
+        };
 
         // TODO: reset some things, right?
 
-        self.send_packet(packet).await?;
+        self.send_packet(clear_request).await?;
 
         self.call_request = None;
 
@@ -223,14 +221,14 @@ impl X25VirtualCircuit {
     pub async fn reset(&mut self, cause: u8, diagnostic_code: Option<u8>) -> io::Result<()> {
         // TODO: states?
 
-        let packet = X25Packet::ResetRequest(X25ResetRequest {
+        let reset_request = X25ResetRequest {
             modulo: self.modulo,
             channel: 1,
             cause,
             diagnostic_code,
-        });
+        };
 
-        self.send_packet(packet).await?;
+        self.send_packet(reset_request).await?;
 
         self.xxx_reset_state();
 
@@ -257,7 +255,7 @@ impl X25VirtualCircuit {
         {
             let (buffer, more_data) = self.send_queue.pop_front().unwrap();
 
-            let packet = X25Packet::Data(X25Data {
+            let data = X25Data {
                 modulo: self.modulo,
                 channel: 1,
                 qualifier: false,
@@ -266,9 +264,9 @@ impl X25VirtualCircuit {
                 receive_sequence: self.receive_sequence,
                 send_sequence: self.send_sequence,
                 buffer,
-            });
+            };
 
-            self.send_packet(packet).await?;
+            self.send_packet(data).await?;
 
             self.send_sequence = (self.send_sequence + 1) % (self.modulo as u16);
 
@@ -284,13 +282,13 @@ impl X25VirtualCircuit {
     }
 
     async fn receive_ready(&mut self) -> io::Result<()> {
-        let packet = X25Packet::ReceiveReady(X25ReceiveReady {
+        let receive_ready = X25ReceiveReady {
             modulo: self.modulo,
             channel: 1,
             receive_sequence: self.receive_sequence,
-        });
+        };
 
-        self.send_packet(packet).await?;
+        self.send_packet(receive_ready).await?;
 
         self.xxx_un_rrd_packets = 0;
 
@@ -298,25 +296,25 @@ impl X25VirtualCircuit {
     }
 
     async fn clear_confirmation(&mut self) -> io::Result<()> {
-        let packet = X25Packet::ClearConfirmation(X25ClearConfirmation {
+        let clear_confirmation = X25ClearConfirmation {
             modulo: self.modulo,
             channel: 1,
-        });
+        };
 
-        self.send_packet(packet).await
+        self.send_packet(clear_confirmation).await
     }
 
     async fn reset_confirmation(&mut self) -> io::Result<()> {
-        let packet = X25Packet::ResetConfirmation(X25ResetConfirmation {
+        let reset_confirmation = X25ResetConfirmation {
             modulo: self.modulo,
             channel: 1,
-        });
+        };
 
-        self.send_packet(packet).await
+        self.send_packet(reset_confirmation).await
     }
 
-    async fn send_packet(&mut self, packet: X25Packet) -> io::Result<()> {
-        let buffer = format_packet(&packet)
+    async fn send_packet<P: Into<X25Packet>>(&mut self, packet: P) -> io::Result<()> {
+        let buffer = format_packet(&packet.into())
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
 
         self.link.send(buffer).await
