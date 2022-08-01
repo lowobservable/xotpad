@@ -6,7 +6,7 @@ use tokio::select;
 use tokio_util::codec::Framed;
 
 use crate::x121::X121Address;
-use crate::x25::{X25CallRequest, X25Modulo, X25Packet, X25VirtualCircuit};
+use crate::x25::{X25CallRequest, X25Packet, X25Parameters, X25VirtualCircuit};
 use crate::xot;
 use crate::xot::{XotCodec, XotResolver};
 
@@ -33,7 +33,7 @@ pub struct UserPad<'a, R, W> {
     state: UserPadState,
     reader: BufReader<R>,
     writer: BufWriter<W>,
-    modulo: X25Modulo,
+    parameters: &'a X25Parameters,
     address: &'a X121Address,
     xot_resolver: &'a XotResolver,
     circuit: Option<X25VirtualCircuit>,
@@ -54,18 +54,18 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
     pub fn new(
         reader: R,
         writer: W,
-        modulo: X25Modulo,
+        parameters: &'a X25Parameters,
         address: &'a X121Address,
         xot_resolver: &'a XotResolver,
         listener: Option<TcpListener>,
-        // TODO: Paraemters / Profiles / Profile?
+        // TODO: Profiles / Profile?
         xxx_one_shot: bool,
     ) -> Self {
         Self {
             state: UserPadState::Command,
             reader: BufReader::new(reader),
             writer: BufWriter::new(writer),
-            modulo,
+            parameters,
             address,
             xot_resolver,
             circuit: None,
@@ -92,9 +92,14 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
         let call_user_data = Bytes::from_static(b"\x01\0\0\0");
 
-        let circuit =
-            X25VirtualCircuit::call(link, self.modulo, address, self.address, &call_user_data)
-                .await;
+        let circuit = X25VirtualCircuit::call(
+            link,
+            self.parameters,
+            address,
+            self.address,
+            &call_user_data,
+        )
+        .await;
 
         match circuit {
             Ok(circuit) => {
@@ -173,7 +178,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
                 // TODO: really, this needs to go in a separate thread so it
                 // does not block while we are trying to accept the call...
-                call = wait_for_call(self.modulo, &mut self.listener, true) => {
+                call = wait_for_call(&mut self.listener, self.parameters, true) => {
                     match call {
                         Ok((circuit, call_request)) => self.handle_incoming_call(circuit, call_request).await?,
                         Err(error) => panic!("{}", error),
@@ -388,8 +393,8 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 }
 
 async fn wait_for_call(
-    modulo: X25Modulo,
     listener: &mut Option<TcpListener>,
+    parameters: &X25Parameters,
     enable: bool,
 ) -> io::Result<(X25VirtualCircuit, X25CallRequest)> {
     if listener.is_none() || !enable {
@@ -400,7 +405,7 @@ async fn wait_for_call(
 
     let link = Framed::new(tcp_stream, XotCodec::new());
 
-    X25VirtualCircuit::wait_for_call(link, modulo).await
+    X25VirtualCircuit::wait_for_call(link, parameters).await
 }
 
 async fn read_packet(

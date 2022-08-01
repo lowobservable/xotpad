@@ -14,10 +14,8 @@ use crate::x25::packet::{
     X25ClearRequest, X25Data, X25Modulo, X25Packet, X25PacketType, X25ReceiveReady,
     X25ResetConfirmation, X25ResetRequest,
 };
+use crate::x25::parameters::X25Parameters;
 use crate::xot::XotCodec;
-
-const DEFAULT_MAX_PACKET_SIZE: usize = 128;
-const DEFAULT_WINDOW_SIZE: u16 = 2;
 
 // TODO: how can I get rid of the dependency on TcpStream and XotCodec here?
 pub struct X25VirtualCircuit {
@@ -62,19 +60,19 @@ enum X25VirtualCircuitState {
 }
 
 impl X25VirtualCircuit {
-    fn new(link: Framed<TcpStream, XotCodec>, modulo: X25Modulo) -> Self {
+    fn new(link: Framed<TcpStream, XotCodec>, parameters: &X25Parameters) -> Self {
         Self {
             link,
             state: X25VirtualCircuitState::Ready,
-            modulo,
+            modulo: parameters.modulo(),
             call_request: None,
-            send_max_packet_size: DEFAULT_MAX_PACKET_SIZE,
-            send_window_size: DEFAULT_WINDOW_SIZE,
+            send_max_packet_size: parameters.send_max_packet_size(),
+            send_window_size: parameters.send_window_size(),
             send_queue: VecDeque::new(),
             send_sequence: 0,
             send_window_lower_edge: 0,
-            receive_max_packet_size: DEFAULT_MAX_PACKET_SIZE,
-            receive_window_size: DEFAULT_WINDOW_SIZE,
+            receive_max_packet_size: parameters.receive_max_packet_size(),
+            receive_window_size: parameters.receive_window_size(),
             receive_sequence: 0,
             is_remote_ready: true,
             xxx_un_rrd_packets: 0,
@@ -83,12 +81,12 @@ impl X25VirtualCircuit {
 
     pub async fn call(
         link: Framed<TcpStream, XotCodec>,
-        modulo: X25Modulo,
+        parameters: &X25Parameters,
         called_address: &X121Address,
         calling_address: &X121Address,
         call_user_data: &Bytes,
     ) -> io::Result<Self> {
-        let mut virtual_circuit = Self::new(link, modulo);
+        let mut virtual_circuit = Self::new(link, parameters);
 
         let facilities = vec![
             X25Facility::PacketSize {
@@ -130,9 +128,9 @@ impl X25VirtualCircuit {
 
     pub async fn wait_for_call(
         link: Framed<TcpStream, XotCodec>,
-        modulo: X25Modulo,
+        parameters: &X25Parameters,
     ) -> io::Result<(X25VirtualCircuit, X25CallRequest)> {
-        let mut virtual_circuit = Self::new(link, modulo);
+        let mut virtual_circuit = Self::new(link, parameters);
 
         let packet = virtual_circuit
             .wait_for_packet(&[X25PacketType::CallRequest])

@@ -11,11 +11,9 @@ use tokio_util::codec::Framed;
 
 use xotpad::pad::{HostPad, UserPad};
 use xotpad::x121::X121Address;
-use xotpad::x25::{X25CallRequest, X25Modulo, X25VirtualCircuit};
+use xotpad::x25::{X25CallRequest, X25Parameters, X25VirtualCircuit};
 use xotpad::xot;
 use xotpad::xot::{XotCodec, XotResolver};
-
-const MODULO: X25Modulo = X25Modulo::Extended;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -58,6 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let should_listen_only = matches.is_present("listen_only");
     let should_listen_interactive = matches.is_present("listen_interactive");
 
+    let x25_parameters = X25Parameters::default();
+
     if should_listen_only {
         let mut listen_table = ListenTable::new();
 
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let link = Framed::new(tcp_stream, XotCodec::new());
 
             let (mut circuit, call_request) =
-                X25VirtualCircuit::wait_for_call(link, MODULO).await?;
+                X25VirtualCircuit::wait_for_call(link, &x25_parameters).await?;
 
             let command = listen_table.lookup(&call_request);
 
@@ -150,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut pad = UserPad::new(
             stdin(),
             stdout(),
-            MODULO,
+            &x25_parameters,
             &address,
             &xot_resolver,
             listener,
