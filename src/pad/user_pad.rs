@@ -1,10 +1,11 @@
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio_util::codec::Framed;
 
+use crate::pad::x29::{self, X29CallUserData};
 use crate::x121::X121Address;
 use crate::x25::{X25CallRequest, X25Packet, X25Parameters, X25VirtualCircuit};
 use crate::xot;
@@ -76,7 +77,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         }
     }
 
-    pub async fn call(&mut self, address: &X121Address) -> io::Result<()> {
+    pub async fn call(&mut self, address: &X121Address, call_data: &[u8]) -> io::Result<()> {
         let xot_gateway = self.xot_resolver.resolve(address);
 
         if xot_gateway.is_none() {
@@ -90,7 +91,9 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
         let link = Framed::new(tcp_stream, XotCodec::new());
 
-        let call_user_data = Bytes::from_static(b"\x01\0\0\0");
+        let call_user_data = X29CallUserData::new(call_data).expect("TODO");
+
+        let call_user_data = x29::encode_call_user_data(&call_user_data);
 
         let circuit = X25VirtualCircuit::call(
             link,
@@ -285,13 +288,9 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         mut circuit: X25VirtualCircuit,
         call_request: X25CallRequest,
     ) -> io::Result<()> {
-        let called_address = call_request.called_address.to_string();
+        let (should_accept_call, clear_cause) = self.should_accept_call(&call_request);
 
-        if self.circuit.is_some() {
-            let cause = 1; // "OCC" - number busy
-
-            circuit.clear_call(cause, Some(0)).await?;
-        } else if called_address.starts_with(&self.address.to_string()) {
+        if should_accept_call {
             circuit.accept_call().await?;
 
             async_write!(self.writer, "\r\nCOM\r\n")?;
@@ -299,7 +298,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
             self.circuit = Some(circuit);
             self.switch_to_data_mode()?;
         } else {
-            let cause = 0; // TODO: what should this be?
+            let cause = clear_cause.unwrap_or(0);
 
             circuit.clear_call(cause, Some(0)).await?;
         }
@@ -331,8 +330,9 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
                     async_write!(self.writer, "ERR\r\n\r\n")?;
                 } else {
                     let address: X121Address = args[0].parse().unwrap();
+                    let call_data = "".as_bytes();
 
-                    self.call(&address).await?;
+                    self.call(&address, call_data).await?;
                 }
             }
             Some((UserPadCommand::Clear, _)) => {
@@ -389,6 +389,40 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         }
 
         Ok(())
+    }
+
+    fn should_accept_call(&self, call_request: &X25CallRequest) -> (bool, Option<u8>) {
+        if self.circuit.is_some() {
+            return (false, Some(1)); // "OCC" - number busy...
+        }
+
+        // If a called address is provided, we only accept calls that start with
+        // our address.
+        if !call_request.called_address.is_null() {
+            let called_address = call_request.called_address.to_string();
+
+            if !called_address.starts_with(&self.address.to_string()) {
+                return (false, Some(0)); // TODO: what should this be?
+            }
+        }
+
+        // If call user data is provided, it must be valid X.29 call user data and
+        // specify the PAD protocol.
+        if !call_request.call_user_data.is_empty() {
+            let call_user_data = x29::decode_call_user_data(call_request.call_user_data.clone());
+
+            if call_user_data.is_err() {
+                return (false, Some(0)); // TODO: what should this be?
+            }
+
+            let call_user_data = call_user_data.unwrap();
+
+            if !call_user_data.is_pad() {
+                return (false, Some(0)); // TODO: what should this be?
+            }
+        }
+
+        (true, None)
     }
 }
 

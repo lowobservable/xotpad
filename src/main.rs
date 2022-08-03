@@ -174,7 +174,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         if let Some(call_address) = call_address {
-            pad.call(&call_address).await?;
+            let call_data = "".as_bytes();
+
+            pad.call(&call_address, call_data).await?;
 
             // TODO: we need to check if this was successful, if not exit!
         }
@@ -223,6 +225,8 @@ impl ListenTable {
             if !called_address_expression.is_match(&called_address) {
                 continue;
             }
+
+            // TODO: match on CUD...
 
             return Some(command.clone());
         }
