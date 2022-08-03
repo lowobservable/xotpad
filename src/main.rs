@@ -11,7 +11,7 @@ use tokio_util::codec::Framed;
 
 use xotpad::pad::{HostPad, UserPad};
 use xotpad::x121::X121Address;
-use xotpad::x25::{X25CallRequest, X25Parameters, X25VirtualCircuit};
+use xotpad::x25::{X25CallRequest, X25Modulo, X25Parameters, X25VirtualCircuit};
 use xotpad::xot;
 use xotpad::xot::{XotCodec, XotResolver};
 
@@ -31,6 +31,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .takes_value(true)
                 .value_name("host")
                 .help("XOT gateway"),
+        )
+        .arg(
+            Arg::new("x25_profile")
+                .short('P')
+                .takes_value(true)
+                .value_name("profile")
+                .help("X.25 profile"),
         )
         .arg(
             Arg::new("listen_only")
@@ -53,10 +60,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .get_matches();
 
+    let x25_parameters = if matches.is_present("x25_profile") {
+        match get_x25_profile(matches.value_of("x25_profile").unwrap()) {
+            Some(parameters) => parameters,
+            None => {
+                return Err("TODO - profile not found...".into());
+            }
+        }
+    } else {
+        X25Parameters::default()
+    };
+
     let should_listen_only = matches.is_present("listen_only");
     let should_listen_interactive = matches.is_present("listen_interactive");
-
-    let x25_parameters = X25Parameters::default();
 
     if should_listen_only {
         let mut listen_table = ListenTable::new();
@@ -171,6 +187,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn get_x25_profile(name: &str) -> Option<X25Parameters> {
+    match name {
+        "default8" => Some(X25Parameters::default_with_modulo(X25Modulo::Normal)),
+        "default128" => Some(X25Parameters::default_with_modulo(X25Modulo::Extended)),
+        _ => None,
+    }
 }
 
 struct ListenTable {

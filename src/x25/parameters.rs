@@ -45,6 +45,17 @@ impl X25Parameters {
         })
     }
 
+    pub fn default_with_modulo(modulo: X25Modulo) -> X25Parameters {
+        X25Parameters::new(
+            modulo,
+            DEFAULT_MAX_PACKET_SIZE,
+            DEFAULT_WINDOW_SIZE,
+            DEFAULT_MAX_PACKET_SIZE,
+            DEFAULT_WINDOW_SIZE,
+        )
+        .unwrap()
+    }
+
     pub fn modulo(&self) -> X25Modulo {
         self.modulo
     }
@@ -68,14 +79,7 @@ impl X25Parameters {
 
 impl Default for X25Parameters {
     fn default() -> Self {
-        X25Parameters::new(
-            X25Modulo::Normal,
-            DEFAULT_MAX_PACKET_SIZE,
-            DEFAULT_WINDOW_SIZE,
-            DEFAULT_MAX_PACKET_SIZE,
-            DEFAULT_WINDOW_SIZE,
-        )
-        .unwrap()
+        X25Parameters::default_with_modulo(X25Modulo::Normal)
     }
 }
 
