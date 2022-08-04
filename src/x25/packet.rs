@@ -386,8 +386,8 @@ impl X25Data {
         gfi: u8,
         type_: u8,
     ) -> Result<X25Data, String> {
-        let qualifier = (gfi & 0x80) >> 4 == 1;
-        let delivery_confirmation = (gfi & 0x40) >> 3 == 1;
+        let qualifier = (gfi & 0x08) >> 3 == 1;
+        let delivery_confirmation = (gfi & 0x04) >> 2 == 1;
 
         let send_sequence = ((type_ & 0x0e) >> 1) as u16;
         let receive_sequence = ((type_ & 0xe0) >> 5) as u16;
@@ -416,8 +416,8 @@ impl X25Data {
             return Err("Packet too short".into());
         }
 
-        let qualifier = (gfi & 0x80) >> 4 == 1;
-        let delivery_confirmation = (gfi & 0x40) >> 3 == 1;
+        let qualifier = (gfi & 0x08) >> 3 == 1;
+        let delivery_confirmation = (gfi & 0x04) >> 2 == 1;
 
         let send_sequence = ((type_ & 0xfe) >> 1) as u16;
 
@@ -449,7 +449,7 @@ impl X25Data {
 
         let mut buffer = BytesMut::with_capacity(3 + self.buffer.len());
 
-        let gfi_overlay = ((self.qualifier as u8) << 4) | ((self.delivery_confirmation as u8) << 3);
+        let gfi_overlay = ((self.qualifier as u8) << 3) | ((self.delivery_confirmation as u8) << 2);
         let type_ = ((self.receive_sequence as u8) << 5)
             | ((self.more_data as u8) << 4)
             | ((self.send_sequence as u8) << 1);
@@ -472,7 +472,7 @@ impl X25Data {
 
         let mut buffer = BytesMut::with_capacity(4 + self.buffer.len());
 
-        let gfi_overlay = ((self.qualifier as u8) << 4) | ((self.delivery_confirmation as u8) << 3);
+        let gfi_overlay = ((self.qualifier as u8) << 3) | ((self.delivery_confirmation as u8) << 2);
         let type_ = (self.send_sequence as u8) << 1;
 
         put_packet_header(&mut buffer, self.modulo, gfi_overlay, self.channel, type_)?;

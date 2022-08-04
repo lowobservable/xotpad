@@ -27,7 +27,7 @@ pub struct X25VirtualCircuit {
 
     send_max_packet_size: usize,
     send_window_size: u16,
-    send_queue: VecDeque<(Bytes, bool)>,
+    send_queue: VecDeque<(Bytes, bool, bool)>,
     send_sequence: u16,
     send_window_lower_edge: u16,
 
@@ -197,7 +197,7 @@ impl X25VirtualCircuit {
         Ok(())
     }
 
-    pub async fn send_data(&mut self, mut buffer: Bytes) -> io::Result<()> {
+    pub async fn send_data(&mut self, mut buffer: Bytes, qualifier: bool) -> io::Result<()> {
         if self.state != X25VirtualCircuitState::DataTransfer {
             panic!("invalid state"); // TODO
         }
@@ -206,10 +206,10 @@ impl X25VirtualCircuit {
 
         while buffer.len() > max_packet_size {
             self.send_queue
-                .push_back((buffer.split_to(max_packet_size), true));
+                .push_back((buffer.split_to(max_packet_size), qualifier, true));
         }
 
-        self.send_queue.push_back((buffer, false));
+        self.send_queue.push_back((buffer, qualifier, false));
 
         self.send_queued().await?;
 
@@ -251,12 +251,12 @@ impl X25VirtualCircuit {
             && self.is_remote_ready
             && self.send_sequence != stop_sequence
         {
-            let (buffer, more_data) = self.send_queue.pop_front().unwrap();
+            let (buffer, qualifier, more_data) = self.send_queue.pop_front().unwrap();
 
             let data = X25Data {
                 modulo: self.modulo,
                 channel: 1,
-                qualifier: false,
+                qualifier,
                 delivery_confirmation: false,
                 more_data,
                 receive_sequence: self.receive_sequence,

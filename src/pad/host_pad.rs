@@ -73,8 +73,13 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
     async fn handle_packet(&mut self, packet: X25Packet) -> io::Result<()> {
         match packet {
             X25Packet::Data(data) => {
-                self.writer.write_all(&data.buffer).await?;
-                self.writer.flush().await?;
+                if data.qualifier {
+                    // TODO...
+                    eprintln!("\r\n>>> X.29 Message: {:?}\r\n", &data.buffer);
+                } else {
+                    self.writer.write_all(&data.buffer).await?;
+                    self.writer.flush().await?;
+                }
             }
             X25Packet::ClearRequest(_) => {
                 self.is_running = false;
@@ -94,7 +99,7 @@ impl<R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> Host
         // TODO: Does this make sense, do we check the last byte on host output?
         let data = self.data.clone().freeze();
 
-        self.circuit.send_data(data).await?;
+        self.circuit.send_data(data, false).await?;
 
         self.data.clear();
 

@@ -257,7 +257,14 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
 
     async fn handle_packet(&mut self, packet: X25Packet) -> io::Result<()> {
         match packet {
-            X25Packet::Data(data) => self.writer.write_all(&data.buffer).await?,
+            X25Packet::Data(data) => {
+                if data.qualifier {
+                    // TODO...
+                    eprintln!("\r\n>>> X.29 Message: {:?}\r\n", &data.buffer);
+                } else {
+                    self.writer.write_all(&data.buffer).await?;
+                }
+            }
             X25Packet::ClearRequest(clear_request) => {
                 let cause = clear_request.cause;
                 let diagnostic_code = clear_request.diagnostic_code.unwrap_or(0);
@@ -383,7 +390,11 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
         if true {
             let data = self.data.clone().freeze();
 
-            self.circuit.as_mut().unwrap().send_data(data).await?;
+            self.circuit
+                .as_mut()
+                .unwrap()
+                .send_data(data, false)
+                .await?;
 
             self.data.clear();
         }
