@@ -40,22 +40,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .help("X.25 profile"),
         )
         .arg(
-            Arg::new("listen_only")
+            Arg::new("listen")
                 .short('l')
-                .help("Only listen for incoming calls"),
+                .conflicts_with("accept")
+                .conflicts_with("call_address")
+                .help("Listen for incoming calls"),
         )
         .arg(
-            Arg::new("listen_interactive")
+            Arg::new("accept")
                 .short('L')
-                .conflicts_with("listen_only")
-                .help("Listen for incoming calls"),
+                .conflicts_with("listen")
+                .conflicts_with("call_address")
+                .help("Accept incoming calls"),
         )
         .arg(
             Arg::new("call_address")
                 .required(false)
                 .index(1)
-                .conflicts_with("listen_only")
-                .conflicts_with("listen_interactive")
+                .value_name("address")
+                .conflicts_with("listen")
+                .conflicts_with("accept")
                 .help("X.121 address to call"),
         )
         .get_matches();
@@ -71,10 +75,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         X25Parameters::default()
     };
 
-    let should_listen_only = matches.is_present("listen_only");
-    let should_listen_interactive = matches.is_present("listen_interactive");
+    let should_listen = matches.is_present("listen");
+    let should_accept = matches.is_present("accept");
 
-    if should_listen_only {
+    if should_listen {
         let mut listen_table = ListenTable::new();
 
         listen_table.register("^737202..$", "/home/andrew/tmp/inf0.py".into())?;
@@ -151,7 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(X121Address::from_str)
             .transpose()?;
 
-        let listener = if call_address.is_none() && should_listen_interactive {
+        let listener = if should_accept {
             match TcpListener::bind(("0.0.0.0", xot::TCP_PORT)).await {
                 Ok(l) => Some(l),
                 Err(e) => {

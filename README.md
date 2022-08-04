@@ -9,9 +9,9 @@ Okay, so this is just a prototype for now... the goal is to create a cross-platf
 allowing access to X.25 networks using XOT described in
 [RFC 1613](https://www.rfc-editor.org/rfc/rfc1613.html).
 
-  - [ ] User space X.25 over TCP (XOT)
-      - [ ] Modulo 8
-      - [ ] Modulo 128
+  - [x] User space X.25 over TCP (XOT)
+      - [x] Modulo 8
+      - [x] Modulo 128
       - [ ] Flow control parameter negotiation (packet and window size)
   - [ ] Interactive _Triple-X_ PAD (X.3, X.28 and X.29)
   - [ ] Host PAD providing access to local processes
@@ -19,27 +19,32 @@ allowing access to X.25 networks using XOT described in
 
 ## Usage
 
+### Quick Start
+
 To connect to a host:
 
 ```
-xotpad 73741100
+xotpad -g xot.trysteropac.net 73741100
 ```
 
-To start an interactive PAD:
+To start an interactive X.28 PAD, and call the same host:
+
+<pre>
+<b>xotpad -g xot.trysteropac.net</b>
+* <b>call 73741100</b>
+...
+<kbd>Ctrl+P</kbd>
+* <b>exit</b>
+</pre>
+
+Use <kbd>Ctrl+P</kbd> to recall the PAD, this is similar to the `telnet` <kbd>Ctrl+]</kbd> sequence.
+
+To exit the interactive PAD, use the `exit` command.
+
+By default, the interactive PAD will _not_ accept incoming calls. To listen for, and accept, incoming calls:
 
 ```
-xotpad
+xotpad -g xot.trysteropac.net -L
 ```
 
-By default, the interactive PAD will _not_ listen for incoming calls. To listen for
-incoming calls:
-
-```
-xotpad -L
-```
-
-Finally, to provide a host PAD:
-
-```
-xotpad -l
-```
+Incoming calls will be automatically accepted, assuming the PAD is free.
