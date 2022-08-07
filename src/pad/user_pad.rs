@@ -5,11 +5,12 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::select;
 use tokio_util::codec::Framed;
 
+use crate::pad::resolver::Resolver;
 use crate::pad::x29::{self, X29CallUserData};
 use crate::x121::X121Address;
 use crate::x25::{X25CallRequest, X25Packet, X25Parameters, X25VirtualCircuit};
 use crate::xot;
-use crate::xot::{XotCodec, XotResolver};
+use crate::xot::XotCodec;
 
 macro_rules! async_write {
     ($dst: expr, $fmt: expr) => {
@@ -30,13 +31,13 @@ macro_rules! async_write {
     };
 }
 
-pub struct UserPad<'a, R, W> {
+pub struct UserPad<'a, R, W, V: Resolver> {
     state: UserPadState,
     reader: BufReader<R>,
     writer: BufWriter<W>,
     parameters: &'a X25Parameters,
     address: &'a X121Address,
-    xot_resolver: &'a XotResolver,
+    resolver: &'a V,
     circuit: Option<X25VirtualCircuit>,
     listener: Option<TcpListener>,
     command: String,
@@ -51,13 +52,15 @@ enum UserPadState {
     Shutdown,
 }
 
-impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> UserPad<'a, R, W> {
+impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin, V: Resolver>
+    UserPad<'a, R, W, V>
+{
     pub fn new(
         reader: R,
         writer: W,
         parameters: &'a X25Parameters,
         address: &'a X121Address,
-        xot_resolver: &'a XotResolver,
+        resolver: &'a V,
         listener: Option<TcpListener>,
         // TODO: Profiles / Profile?
         xxx_one_shot: bool,
@@ -68,7 +71,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
             writer: BufWriter::new(writer),
             parameters,
             address,
-            xot_resolver,
+            resolver,
             circuit: None,
             listener,
             command: String::new(),
@@ -78,7 +81,7 @@ impl<'a, R: AsyncRead + std::marker::Unpin, W: AsyncWrite + std::marker::Unpin> 
     }
 
     pub async fn call(&mut self, address: &X121Address, call_data: &[u8]) -> io::Result<()> {
-        let xot_gateway = self.xot_resolver.resolve(address);
+        let xot_gateway = self.resolver.lookup(address);
 
         if xot_gateway.is_none() {
             async_write!(self.writer, "CLR PAD C:0 D:0\r\n\r\n")?; // Huh???

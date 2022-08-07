@@ -1,8 +1,6 @@
-use clap::{Arg, Command as ClapCommand};
+use clap::{Arg, ArgMatches, Command as ClapCommand};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use pty_process::Command as _;
-use regex::Regex;
-use std::env;
 use std::str::FromStr;
 use tokio::io::{split, stdin, stdout};
 use tokio::net::TcpListener;
@@ -11,9 +9,15 @@ use tokio_util::codec::Framed;
 
 use xotpad::pad::{HostPad, UserPad};
 use xotpad::x121::X121Address;
-use xotpad::x25::{X25CallRequest, X25Modulo, X25Parameters, X25VirtualCircuit};
+use xotpad::x25::{X25Modulo, X25Parameters, X25VirtualCircuit};
 use xotpad::xot;
-use xotpad::xot::{XotCodec, XotResolver};
+use xotpad::xot::XotCodec;
+
+mod incoming;
+use incoming::IncomingTable;
+
+mod outgoing;
+use outgoing::OutgoingTable;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,6 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .arg(
             Arg::new("address")
                 .short('a')
+                .env("X121_ADDRESS")
                 .takes_value(true)
                 .value_name("address")
                 .help("Local X.121 address"),
@@ -28,6 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .arg(
             Arg::new("xot_gateway")
                 .short('g')
+                .env("XOT_GATEWAY")
                 .takes_value(true)
                 .value_name("host")
                 .help("XOT gateway"),
@@ -75,124 +81,133 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         X25Parameters::default()
     };
 
-    let should_listen = matches.is_present("listen");
-    let should_accept = matches.is_present("accept");
+    if matches.is_present("listen") {
+        run_host_pad(&x25_parameters, &matches).await
+    } else {
+        run_user_pad(&x25_parameters, &matches).await
+    }
+}
 
-    if should_listen {
-        let mut listen_table = ListenTable::new();
+async fn run_user_pad(
+    x25_parameters: &X25Parameters,
+    matches: &ArgMatches,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let address = matches
+        .value_of("address")
+        .map(|address| address.to_string())
+        .unwrap_or_else(|| "".to_string());
 
-        listen_table.register("^737202..$", "/home/andrew/tmp/inf0.py".into())?;
+    let address = X121Address::from_str(&address)?;
 
-        let listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT)).await?;
+    let xot_gateway = matches
+        .value_of("xot_gateway")
+        .map(|gateway| gateway.to_string());
 
-        loop {
-            let (tcp_stream, tcp_address) = listener.accept().await?;
+    let mut outgoing = OutgoingTable::new();
 
-            println!("got a connection from {}", tcp_address);
+    if let Some(xot_gateway) = xot_gateway {
+        outgoing.add("", xot_gateway);
+    } else {
+        // TODO...
+        outgoing.add("^(...)(...)..$", r"\2.\1.x25.org".into());
+    }
 
-            let link = Framed::new(tcp_stream, XotCodec::new());
+    let call_address = matches
+        .value_of("call_address")
+        .map(X121Address::from_str)
+        .transpose()?;
 
-            let (mut circuit, call_request) =
-                X25VirtualCircuit::wait_for_call(link, &x25_parameters).await?;
-
-            let command = listen_table.lookup(&call_request);
-
-            if command.is_none() {
-                circuit.clear_call(0, Some(0)).await?;
-                continue;
+    let listener = if matches.is_present("accept") {
+        match TcpListener::bind(("0.0.0.0", xot::TCP_PORT)).await {
+            Ok(l) => Some(l),
+            Err(e) => {
+                eprintln!("xotpad: unable to listen on {}: {}", xot::TCP_PORT, e);
+                None
             }
-
-            let command = command.unwrap();
-
-            let command: Vec<&str> = command.split_whitespace().collect();
-
-            let mut child = Command::new(command[0])
-                .args(&command[1..])
-                .spawn_pty(None)?;
-
-            let (a, b) = split(child.pty_mut());
-
-            circuit.accept_call().await?;
-
-            let pad = HostPad::new(a, b, circuit);
-
-            pad.run().await?;
-
-            // If we get here and the child process is still running... kill it!
-            if let Err(e) = child.kill().await {
-                println!("I tried killing, but got {:?}", e);
-            }
-
-            let exit_status = child.wait().await?;
-
-            println!("think we are done, exited with {:?}", exit_status);
         }
     } else {
-        let address = matches
-            .value_of("address")
-            .map(|address| address.to_string())
-            .or_else(|| env::var("X121_ADDRESS").ok())
-            .unwrap_or_else(|| "".to_string());
+        None
+    };
 
-        let address = X121Address::from_str(&address)?;
+    let mut pad = UserPad::new(
+        stdin(),
+        stdout(),
+        x25_parameters,
+        &address,
+        &outgoing,
+        listener,
+        call_address.is_some(),
+    );
 
-        let xot_gateway = matches
-            .value_of("xot_gateway")
-            .map(|gateway| gateway.to_string())
-            .or_else(|| env::var("XOT_GATEWAY").ok());
+    if let Some(call_address) = call_address {
+        let call_data = "".as_bytes();
 
-        let mut xot_resolver = XotResolver::new();
+        pad.call(&call_address, call_data).await?;
 
-        if let Some(xot_gateway) = xot_gateway {
-            xot_resolver.add("", xot_gateway);
-        } else {
-            // TODO...
-            xot_resolver.add("^(...)(...)..$", r"\2.\1.x25.org".into());
+        // TODO: we need to check if this was successful, if not exit!
+    }
+
+    enable_raw_mode()?;
+
+    pad.run().await?;
+
+    disable_raw_mode()?;
+
+    Ok(())
+}
+
+async fn run_host_pad(
+    x25_parameters: &X25Parameters,
+    _matches: &ArgMatches,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut incoming = IncomingTable::new();
+
+    incoming.add("^737202..$", "/home/andrew/tmp/inf0.py".into())?;
+
+    let listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT)).await?;
+
+    loop {
+        let (tcp_stream, tcp_address) = listener.accept().await?;
+
+        println!("got a connection from {}", tcp_address);
+
+        let link = Framed::new(tcp_stream, XotCodec::new());
+
+        let (mut circuit, call_request) =
+            X25VirtualCircuit::wait_for_call(link, x25_parameters).await?;
+
+        let command = incoming.lookup(&call_request);
+
+        if command.is_none() {
+            circuit.clear_call(0, Some(0)).await?;
+            continue;
         }
 
-        let call_address = matches
-            .value_of("call_address")
-            .map(X121Address::from_str)
-            .transpose()?;
+        let command = command.unwrap();
 
-        let listener = if should_accept {
-            match TcpListener::bind(("0.0.0.0", xot::TCP_PORT)).await {
-                Ok(l) => Some(l),
-                Err(e) => {
-                    eprintln!("xotpad: unable to listen on {}: {}", xot::TCP_PORT, e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let command: Vec<&str> = command.split_whitespace().collect();
 
-        let mut pad = UserPad::new(
-            stdin(),
-            stdout(),
-            &x25_parameters,
-            &address,
-            &xot_resolver,
-            listener,
-            call_address.is_some(),
-        );
+        let mut child = Command::new(command[0])
+            .args(&command[1..])
+            .spawn_pty(None)?;
 
-        if let Some(call_address) = call_address {
-            let call_data = "".as_bytes();
+        let (a, b) = split(child.pty_mut());
 
-            pad.call(&call_address, call_data).await?;
+        circuit.accept_call().await?;
 
-            // TODO: we need to check if this was successful, if not exit!
-        }
-
-        enable_raw_mode()?;
+        let pad = HostPad::new(a, b, circuit);
 
         pad.run().await?;
 
-        disable_raw_mode()?;
-    }
+        // If we get here and the child process is still running... kill it!
+        if let Err(e) = child.kill().await {
+            println!("I tried killing, but got {:?}", e);
+        }
 
-    Ok(())
+        let exit_status = child.wait().await?;
+
+        println!("think we are done, exited with {:?}", exit_status);
+    }
 }
 
 fn get_x25_profile(name: &str) -> Option<X25Parameters> {
@@ -200,47 +215,5 @@ fn get_x25_profile(name: &str) -> Option<X25Parameters> {
         "default8" => Some(X25Parameters::default_with_modulo(X25Modulo::Normal)),
         "default128" => Some(X25Parameters::default_with_modulo(X25Modulo::Extended)),
         _ => None,
-    }
-}
-
-struct ListenTable {
-    targets: Vec<(Regex, String)>,
-}
-
-impl ListenTable {
-    fn new() -> Self {
-        Self {
-            targets: Vec::new(),
-        }
-    }
-
-    fn register(&mut self, called_address: &str, command: String) -> Result<(), String> {
-        let called_address = Regex::new(called_address).unwrap();
-
-        self.targets.push((called_address, command));
-
-        Ok(())
-    }
-
-    fn lookup(&self, call_request: &X25CallRequest) -> Option<String> {
-        let called_address = call_request.called_address.to_string();
-
-        for (called_address_expression, command) in self.targets.iter() {
-            if !called_address_expression.is_match(&called_address) {
-                continue;
-            }
-
-            // TODO: match on CUD...
-
-            return Some(command.clone());
-        }
-
-        None
-    }
-}
-
-impl Default for ListenTable {
-    fn default() -> Self {
-        ListenTable::new()
     }
 }

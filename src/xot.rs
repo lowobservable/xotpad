@@ -1,9 +1,7 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use regex::{Captures, Regex};
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
 
-use crate::x121::X121Address;
 use crate::x25;
 
 pub const TCP_PORT: u16 = 1998;
@@ -128,57 +126,4 @@ fn decode_header(buffer: &mut BytesMut) -> io::Result<Option<(u16, usize)>> {
     }
 
     Ok(Some((version, length)))
-}
-
-pub struct XotResolver {
-    routes: Vec<(Regex, String)>,
-}
-
-impl XotResolver {
-    pub fn new() -> Self {
-        Self { routes: Vec::new() }
-    }
-
-    pub fn add(&mut self, address: &str, gateway: String) {
-        let regex = Regex::new(address).unwrap();
-
-        self.routes.push((regex, gateway));
-    }
-
-    pub fn resolve(&self, address: &X121Address) -> Option<String> {
-        let address = address.to_string();
-
-        for (regex, gateway_template) in self.routes.iter() {
-            let captures = regex.captures(&address);
-
-            if captures.is_none() {
-                continue;
-            }
-
-            let gateway = xot_template_replace(gateway_template, captures.unwrap());
-
-            return Some(gateway);
-        }
-
-        None
-    }
-}
-
-impl Default for XotResolver {
-    fn default() -> Self {
-        XotResolver::new()
-    }
-}
-
-fn xot_template_replace(template: &str, captures: Captures) -> String {
-    let mut address = template.to_string();
-
-    for index in 1..captures.len() {
-        let pattern = "\\".to_owned() + &index.to_string();
-        let replacement = captures.get(index).unwrap().as_str();
-
-        address = address.replace(&pattern, replacement);
-    }
-
-    address
 }
