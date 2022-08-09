@@ -557,8 +557,8 @@ impl X25VirtualCircuit {
             } => Some((from_called, from_calling)),
             _ => None,
         }) {
-            self.send_window_size = *from_calling as u16;
-            self.receive_window_size = *from_called as u16;
+            self.send_window_size = clamp_window_size(*from_calling as u16, self.modulo);
+            self.receive_window_size = clamp_window_size(*from_called as u16, self.modulo);
         }
     }
 
@@ -592,8 +592,12 @@ impl X25VirtualCircuit {
             } => Some((from_called, from_calling)),
             _ => None,
         }) {
-            self.send_window_size = min(self.send_window_size, *from_called as u16);
-            self.receive_window_size = min(self.receive_window_size, *from_calling as u16);
+            self.send_window_size =
+                clamp_window_size(min(self.send_window_size, *from_called as u16), self.modulo);
+            self.receive_window_size = clamp_window_size(
+                min(self.receive_window_size, *from_calling as u16),
+                self.modulo,
+            );
 
             facilities.push(X25Facility::WindowSize {
                 from_called: self.send_window_size as u8,
@@ -619,4 +623,8 @@ fn is_sequence_in_range(sequence: u16, start: u16, end: u16) -> bool {
     }
 
     false
+}
+
+fn clamp_window_size(size: u16, modulo: X25Modulo) -> u16 {
+    min(size, (modulo as u16) - 1)
 }

@@ -12,7 +12,7 @@ allowing access to X.25 networks using XOT described in
   - [x] User space X.25 over TCP (XOT)
       - [x] Modulo 8
       - [x] Modulo 128
-      - [ ] Flow control parameter negotiation (packet and window size)
+      - [x] Flow control parameter negotiation (packet and window size)
   - [ ] Interactive _Triple-X_ PAD (X.3, X.28 and X.29)
   - [ ] Host PAD providing access to local processes
   - [ ] DNS-based X.25 address resolution

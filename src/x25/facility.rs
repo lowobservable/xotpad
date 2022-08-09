@@ -41,6 +41,16 @@ pub fn parse_facilities(mut buffer: Bytes) -> Result<Vec<X25Facility>, String> {
         } else if code == 0x43 {
             let (from_called, from_calling) = parse_class_b_parameters(&mut buffer)?;
 
+            // This does not account for the window size limit based on modulo, that is
+            // applied in the virtual circuit layer.
+            if !(1..=127).contains(&from_called) {
+                return Err("Facility value not allowed or invalid".into());
+            }
+
+            if !(1..=127).contains(&from_calling) {
+                return Err("Facility value not allowed or invalid".into());
+            }
+
             facilities.push(X25Facility::WindowSize {
                 from_called,
                 from_calling,
@@ -92,6 +102,16 @@ pub fn format_facilities(facilities: &Vec<X25Facility>) -> Result<Bytes, String>
                 from_called,
                 from_calling,
             } => {
+                // This does not account for the window size limit based on modulo, that
+                // is applied in the virtual circuit layer.
+                if !(1..=127).contains(from_called) {
+                    return Err("Facility value not allowed or invalid".into());
+                }
+
+                if !(1..=127).contains(from_calling) {
+                    return Err("Facility value not allowed or invalid".into());
+                }
+
                 buffer.put_u8(0x43);
                 buffer.put(format_class_b_parameters(&(*from_called, *from_calling)));
             }
