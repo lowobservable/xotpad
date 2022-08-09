@@ -33,11 +33,12 @@ To start an interactive X.28 PAD, and call the same host:
 <b>xotpad -g xot.trysteropac.net</b>
 * <b>call 73741100</b>
 ...
-<kbd>Ctrl+P</kbd>
+<kbd><kbd>Ctrl</kbd>+<kbd>P</kbd></kbd>
 * <b>exit</b>
 </pre>
 
-Use <kbd>Ctrl+P</kbd> to recall the PAD, this is similar to the `telnet` <kbd>Ctrl+]</kbd> sequence.
+Use <kbd><kbd>Ctrl</kbd>+<kbd>P</kbd></kbd> to recall the PAD, this is similar to the `telnet`
+<kbd><kbd>Ctrl</kbd>+<kbd>]</kbd></kbd> sequence.
 
 To exit the interactive PAD, use the `exit` command.
 

@@ -163,7 +163,7 @@ async fn run_host_pad(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut incoming = IncomingTable::new();
 
-    incoming.add("^737202..$", "/home/andrew/tmp/inf0.py".into())?;
+    incoming.add("^737411..$", "/home/andrew/tmp/inf0.py".into())?;
 
     let incoming = Arc::new(incoming);
     let x25_parameters = Arc::new(x25_parameters);
