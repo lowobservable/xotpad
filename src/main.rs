@@ -2,16 +2,14 @@ use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 
-mod x25;
-
-mod xot;
-use xot::XotLinkLayer;
+use xotpad::x25;
+use xotpad::xot::{self, XotLinkLayer};
 
 fn main() -> io::Result<()> {
     let x: Vec<String> = env::args().collect();
 
     if x[1] == "call" {
-        let tcp_stream = TcpStream::connect(("127.0.0.1", 1998))?;
+        let tcp_stream = TcpStream::connect(("127.0.0.1", xot::TCP_PORT))?;
 
         let mut xot_link_layer = XotLinkLayer::new(tcp_stream);
 

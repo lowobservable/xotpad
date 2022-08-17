@@ -4,12 +4,15 @@ use std::net::TcpStream;
 
 use crate::x25;
 
+pub const TCP_PORT: u16 = 1998;
+
 pub struct XotLinkLayer {
     stream: TcpStream,
     recv_buf: BytesMut,
 }
 
 impl XotLinkLayer {
+    /// Creates a new `XotLinkLayer` over the underlying `TcpStream`.
     pub fn new(stream: TcpStream) -> Self {
         Self {
             stream,
@@ -17,6 +20,7 @@ impl XotLinkLayer {
         }
     }
 
+    /// Sends an X.25 packet.
     pub fn send(&mut self, x25_packet: &[u8]) -> io::Result<()> {
         let mut buf = BytesMut::new();
 
@@ -26,6 +30,7 @@ impl XotLinkLayer {
         self.stream.write_all(&buf)
     }
 
+    /// Receives an X.25 packet.
     pub fn recv(&mut self) -> io::Result<Bytes> {
         loop {
             let x25_packet = decode(&mut self.recv_buf)
@@ -47,6 +52,10 @@ impl XotLinkLayer {
         }
     }
 
+    /// Unwraps this `XotLinkLayer`, returning the underlying `TcpStream`.
+    ///
+    /// Note that any leftover data in the internal buffer is lost. Therefore, a
+    /// following read from the underlying `TcpStream` may lead to data loss.
     pub fn into_stream(self) -> TcpStream {
         self.stream
     }
