@@ -15,14 +15,14 @@ use crate::x25;
 /// Registered XOT TCP port number.
 pub const TCP_PORT: u16 = 1998;
 
-/// XOT link layer allowing X.25 packets to be transmitted over a `TcpStream`.
-pub struct XotLinkLayer {
+/// XOT link allowing X.25 packets to be transmitted over a `TcpStream`.
+pub struct XotLink {
     stream: TcpStream,
     recv_buf: BytesMut,
 }
 
-impl XotLinkLayer {
-    /// Creates a new `XotLinkLayer` over the underlying `TcpStream`.
+impl XotLink {
+    /// Creates a new `XotLink` over the underlying `TcpStream`.
     pub fn new(stream: TcpStream) -> Self {
         Self {
             stream,
@@ -62,7 +62,7 @@ impl XotLinkLayer {
         }
     }
 
-    /// Unwraps this `XotLinkLayer`, returning the underlying `TcpStream`.
+    /// Unwraps this `XotLink`, returning the underlying `TcpStream`.
     ///
     /// Note that any leftover data in the internal buffer is lost. Therefore, a
     /// following read from the underlying `TcpStream` may lead to data loss.
