@@ -15,7 +15,7 @@ use crate::x25;
 /// Registered XOT TCP port number.
 pub const TCP_PORT: u16 = 1998;
 
-/// An XOT link layer allowing X.25 packets to be transmitted over a `TcpStream`.
+/// XOT link layer allowing X.25 packets to be transmitted over a `TcpStream`.
 pub struct XotLinkLayer {
     stream: TcpStream,
     recv_buf: BytesMut,
