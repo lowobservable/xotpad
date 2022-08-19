@@ -12,9 +12,7 @@ pub struct X121Addr {
 
 impl X121Addr {
     /// Creates a new `X121Addr` from digits.
-    pub fn from_digits<I: IntoIterator<Item = u8>>(digits: I) -> Result<Self, String> {
-        let digits: Vec<u8> = digits.into_iter().collect();
-
+    pub fn from_digits(digits: &[u8]) -> Result<Self, String> {
         if digits.len() > 15 {
             return Err("too many digits".into());
         }
@@ -100,7 +98,7 @@ mod tests {
 
     #[test]
     fn from_digits_with_null_input() {
-        let addr = X121Addr::from_digits([]);
+        let addr = X121Addr::from_digits(&[]);
 
         assert!(addr.is_ok());
 
@@ -109,7 +107,7 @@ mod tests {
 
     #[test]
     fn from_digits_with_valid_input() {
-        let addr = X121Addr::from_digits([7, 3, 7, 4, 1, 1, 0, 0]);
+        let addr = X121Addr::from_digits(&[7, 3, 7, 4, 1, 1, 0, 0]);
 
         assert!(addr.is_ok());
 
@@ -118,14 +116,14 @@ mod tests {
 
     #[test]
     fn from_digits_with_too_long_input() {
-        let addr = X121Addr::from_digits([1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6]);
+        let addr = X121Addr::from_digits(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6]);
 
         assert!(addr.is_err());
     }
 
     #[test]
     fn from_digits_with_out_of_range_digit_input() {
-        let addr = X121Addr::from_digits([1, 2, 3, 10, 20, 100]);
+        let addr = X121Addr::from_digits(&[1, 2, 3, 10, 20, 100]);
 
         assert!(addr.is_err());
     }
