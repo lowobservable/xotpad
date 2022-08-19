@@ -73,7 +73,7 @@ impl XotLink {
 
 const XOT_HEADER_LEN: usize = 4;
 
-fn encode(x25_packet: &[u8], buf: &mut BytesMut) -> Result<(), String> {
+fn encode(x25_packet: &[u8], buf: &mut BytesMut) -> Result<usize, String> {
     let version: u16 = 0;
     let len = x25_packet.len();
 
@@ -91,7 +91,7 @@ fn encode(x25_packet: &[u8], buf: &mut BytesMut) -> Result<(), String> {
     buf.put_u16(len as u16);
     buf.put_slice(x25_packet);
 
-    Ok(())
+    Ok(XOT_HEADER_LEN + len)
 }
 
 fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
@@ -144,7 +144,7 @@ mod tests {
         let x25_packet = b"\x10\x01\xe5"; // Modulo 8 Receive Ready
         let mut buf = BytesMut::new();
 
-        assert!(encode(x25_packet, &mut buf).is_ok());
+        assert_eq!(encode(x25_packet, &mut buf), Ok(7));
 
         assert_eq!(&buf[..], b"\x00\x00\x00\x03\x10\x01\xe5");
     }
