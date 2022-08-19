@@ -66,5 +66,90 @@ impl FromStr for X121Addr {
 mod tests {
     use super::*;
 
-    // ...
+    #[test]
+    fn from_str_with_null_input() {
+        let addr = X121Addr::from_str("");
+
+        assert!(addr.is_ok());
+
+        assert_eq!(addr.unwrap().to_string(), "");
+    }
+
+    #[test]
+    fn from_str_with_valid_input() {
+        let addr = X121Addr::from_str("73741100");
+
+        assert!(addr.is_ok());
+
+        assert_eq!(addr.unwrap().to_string(), "73741100");
+    }
+
+    #[test]
+    fn from_str_with_too_long_input() {
+        let addr = X121Addr::from_str("1234567890123456");
+
+        assert!(addr.is_err());
+    }
+
+    #[test]
+    fn from_str_with_non_digit_input() {
+        let addr = X121Addr::from_str("123abc");
+
+        assert!(addr.is_err());
+    }
+
+    #[test]
+    fn from_digits_with_null_input() {
+        let addr = X121Addr::from_digits([]);
+
+        assert!(addr.is_ok());
+
+        assert_eq!(addr.unwrap().to_string(), "");
+    }
+
+    #[test]
+    fn from_digits_with_valid_input() {
+        let addr = X121Addr::from_digits([7, 3, 7, 4, 1, 1, 0, 0]);
+
+        assert!(addr.is_ok());
+
+        assert_eq!(addr.unwrap().to_string(), "73741100");
+    }
+
+    #[test]
+    fn from_digits_with_too_long_input() {
+        let addr = X121Addr::from_digits([1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6]);
+
+        assert!(addr.is_err());
+    }
+
+    #[test]
+    fn from_digits_with_out_of_range_digit_input() {
+        let addr = X121Addr::from_digits([1, 2, 3, 10, 20, 100]);
+
+        assert!(addr.is_err());
+    }
+
+    #[test]
+    fn is_null_true() {
+        let addr = X121Addr::from_str("").unwrap();
+
+        assert_eq!(addr.is_null(), true);
+    }
+
+    #[test]
+    fn is_null_false() {
+        let addr = X121Addr::from_str("73741100").unwrap();
+
+        assert_eq!(addr.is_null(), false);
+    }
+
+    #[test]
+    fn digits() {
+        let addr = X121Addr::from_str("73741100").unwrap();
+
+        let digits: Vec<u8> = addr.digits().collect();
+
+        assert_eq!(digits, [7, 3, 7, 4, 1, 1, 0, 0]);
+    }
 }
