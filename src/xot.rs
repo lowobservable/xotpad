@@ -134,3 +134,111 @@ fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
 
     Ok(Some(x25_packet.freeze()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_with_valid_x25_packet() {
+        let x25_packet = b"\x10\x01\xe5"; // Modulo 8 Receive Ready
+        let mut buf = BytesMut::new();
+
+        assert!(encode(x25_packet, &mut buf).is_ok());
+
+        assert_eq!(&buf[..], b"\x00\x00\x00\x03\x10\x01\xe5");
+    }
+
+    #[test]
+    fn encode_with_too_short_x25_packet() {
+        let x25_packet = b"\x00\x01";
+        let mut buf = BytesMut::new();
+
+        assert!(encode(x25_packet, &mut buf).is_err());
+    }
+
+    #[test]
+    fn encode_with_too_long_x25_packet() {
+        let x25_packet = [0; 4104];
+        let mut buf = BytesMut::new();
+
+        assert!(encode(&x25_packet, &mut buf).is_err());
+    }
+
+    #[test]
+    fn decode_with_incomplete_header() {
+        let mut buf = BytesMut::from(&b"\x00\x00\x00"[..]);
+
+        let x25_packet = decode(&mut buf);
+
+        assert!(x25_packet.is_ok());
+        assert!(x25_packet.unwrap().is_none());
+    }
+
+    #[test]
+    fn decode_with_unsupported_version() {
+        let mut buf = BytesMut::from(&b"\x00\x01\x00\x03\x10\x01\xe5"[..]);
+
+        let x25_packet = decode(&mut buf);
+
+        assert!(x25_packet.is_err());
+    }
+
+    #[test]
+    fn decode_with_too_short_x25_packet() {
+        let mut buf = BytesMut::from(&b"\x00\x00\x00\x02\x00\x01"[..]);
+
+        let x25_packet = decode(&mut buf);
+
+        assert!(x25_packet.is_err());
+    }
+
+    #[test]
+    fn decode_with_too_long_x25_packet() {
+        let mut buf = BytesMut::from(&b"\x00\x00\x10\x08\x00\x01"[..]);
+
+        let x25_packet = decode(&mut buf);
+
+        assert!(x25_packet.is_err());
+    }
+
+    #[test]
+    fn decode_with_incomplete_x25_packet() {
+        let mut buf = BytesMut::from(&b"\x00\x00\x00\x03\x10\x01"[..]);
+
+        let x25_packet = decode(&mut buf);
+
+        assert!(x25_packet.is_ok());
+        assert!(x25_packet.unwrap().is_none());
+    }
+
+    #[test]
+    fn decode_with_complete_x25_packet() {
+        let mut buf = BytesMut::from(&b"\x00\x00\x00\x03\x10\x01\xe5"[..]);
+
+        let x25_packet = decode(&mut buf);
+
+        assert!(x25_packet.is_ok());
+        assert!(x25_packet.as_ref().unwrap().is_some());
+
+        let x25_packet = x25_packet.unwrap().unwrap();
+
+        assert_eq!(&x25_packet[..], b"\x10\x01\xe5");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn decode_with_complete_x25_packet_and_partial_xot_header() {
+        let mut buf = BytesMut::from(&b"\x00\x00\x00\x03\x10\x01\xe5\x00"[..]);
+
+        let x25_packet = decode(&mut buf);
+
+        assert!(x25_packet.is_ok());
+        assert!(x25_packet.as_ref().unwrap().is_some());
+
+        let x25_packet = x25_packet.unwrap().unwrap();
+
+        assert_eq!(&x25_packet[..], b"\x10\x01\xe5");
+        assert_eq!(&buf[..], b"\x00");
+    }
+}

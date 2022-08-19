@@ -134,14 +134,14 @@ mod tests {
     fn is_null_true() {
         let addr = X121Addr::from_str("").unwrap();
 
-        assert_eq!(addr.is_null(), true);
+        assert!(addr.is_null());
     }
 
     #[test]
     fn is_null_false() {
         let addr = X121Addr::from_str("73741100").unwrap();
 
-        assert_eq!(addr.is_null(), false);
+        assert!(!addr.is_null());
     }
 
     #[test]
