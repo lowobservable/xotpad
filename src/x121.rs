@@ -26,6 +26,11 @@ impl X121Addr {
         Self::from_str(&addr)
     }
 
+    /// Returns the number of digits.
+    pub fn len(&self) -> usize {
+        self.addr.len()
+    }
+
     /// Returns `true` if the address has no digits, and `false` otherwise.
     pub fn is_null(&self) -> bool {
         self.addr.is_empty()

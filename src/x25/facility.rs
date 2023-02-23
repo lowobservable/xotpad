@@ -47,7 +47,7 @@ impl X25Facility {
 }
 
 /// Encode facilities for a X.25 facilities block, returning how many bytes were
-/// encoded
+/// encoded.
 ///
 /// *Warning*: on a failure to encode facilities the buffer will be left in a bad state.
 pub fn encode_facilities(facilities: &[X25Facility], buf: &mut BytesMut) -> Result<usize, String> {
