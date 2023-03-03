@@ -6,9 +6,9 @@ use xotpad::x25;
 use xotpad::xot::{self, XotLink};
 
 fn main() -> io::Result<()> {
-    let x: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().collect();
 
-    if x[1] == "call" {
+    if args[1] == "send" {
         let tcp_stream = TcpStream::connect(("127.0.0.1", xot::TCP_PORT))?;
 
         let mut xot_link_layer = XotLink::new(tcp_stream);
@@ -18,7 +18,7 @@ fn main() -> io::Result<()> {
         for len in x25::MIN_PACKET_LEN..=x25::MAX_PACKET_LEN {
             xot_link_layer.send(&packet[..len])?;
         }
-    } else if x[1] == "listen" {
+    } else if args[1] == "recv" {
         let tcp_listener = TcpListener::bind("127.0.0.1:1998")?;
 
         for tcp_stream in tcp_listener.incoming() {
