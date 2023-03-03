@@ -334,7 +334,68 @@ mod tests {
 
         assert!(len.is_ok());
 
+        assert_eq!(len.unwrap(), 8);
+
         assert_eq!(&buf[..], b"\x10\x01\x0b\x34\x12\x34\x56\x70");
+    }
+
+    #[test]
+    fn encode_call_request_with_facilities() {
+        let call_request = X25CallRequest {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::from_str("1234").unwrap(),
+            calling_addr: X121Addr::from_str("567").unwrap(),
+            facilities: vec![
+                X25Facility::PacketSize {
+                    from_called: 128,
+                    from_calling: 128,
+                },
+                X25Facility::WindowSize {
+                    from_called: 2,
+                    from_calling: 2,
+                },
+            ],
+            call_user_data: Bytes::new(),
+        };
+
+        let mut buf = BytesMut::new();
+
+        let len = call_request.encode(&mut buf);
+
+        assert!(len.is_ok());
+
+        assert_eq!(len.unwrap(), 15);
+
+        assert_eq!(
+            &buf[..],
+            b"\x10\x01\x0b\x34\x12\x34\x56\x70\x06\x42\x07\x07\x43\x02\x02"
+        );
+    }
+
+    #[test]
+    fn encode_call_request_with_call_user_data() {
+        let call_request = X25CallRequest {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::from_str("1234").unwrap(),
+            calling_addr: X121Addr::from_str("567").unwrap(),
+            facilities: Vec::new(),
+            call_user_data: Bytes::from_static(b"\x00\x00\x00\x01"),
+        };
+
+        let mut buf = BytesMut::new();
+
+        let len = call_request.encode(&mut buf);
+
+        assert!(len.is_ok());
+
+        assert_eq!(len.unwrap(), 13);
+
+        assert_eq!(
+            &buf[..],
+            b"\x10\x01\x0b\x34\x12\x34\x56\x70\x00\x00\x00\x00\x01"
+        );
     }
 
     #[test]
@@ -365,6 +426,80 @@ mod tests {
         );
 
         assert!(call_request.facilities.is_empty());
-        assert_eq!(&call_request.call_user_data[..], b"");
+        assert!(call_request.call_user_data.is_empty());
+    }
+
+    #[test]
+    fn decode_call_request_with_facilities() {
+        let buf =
+            Bytes::from_static(b"\x10\x01\x0b\x34\x12\x34\x56\x70\x06\x42\x07\x07\x43\x02\x02");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::CallRequest);
+
+        let X25Packet::CallRequest(call_request) = packet;
+
+        assert_eq!(call_request.modulo, X25Modulo::Normal);
+        assert_eq!(call_request.channel, 1);
+
+        assert_eq!(
+            call_request.called_addr,
+            X121Addr::from_str("1234").unwrap()
+        );
+
+        assert_eq!(
+            call_request.calling_addr,
+            X121Addr::from_str("567").unwrap()
+        );
+
+        let expected_facilities = [
+            X25Facility::PacketSize {
+                from_called: 128,
+                from_calling: 128,
+            },
+            X25Facility::WindowSize {
+                from_called: 2,
+                from_calling: 2,
+            },
+        ];
+
+        assert_eq!(call_request.facilities, expected_facilities);
+        assert!(call_request.call_user_data.is_empty());
+    }
+
+    #[test]
+    fn decode_call_request_with_call_user_data() {
+        let buf = Bytes::from_static(b"\x10\x01\x0b\x34\x12\x34\x56\x70\x00\x00\x00\x00\x01");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::CallRequest);
+
+        let X25Packet::CallRequest(call_request) = packet;
+
+        assert_eq!(call_request.modulo, X25Modulo::Normal);
+        assert_eq!(call_request.channel, 1);
+
+        assert_eq!(
+            call_request.called_addr,
+            X121Addr::from_str("1234").unwrap()
+        );
+
+        assert_eq!(
+            call_request.calling_addr,
+            X121Addr::from_str("567").unwrap()
+        );
+
+        assert!(call_request.facilities.is_empty());
+        assert_eq!(&call_request.call_user_data[..], b"\x00\x00\x00\x01");
     }
 }
