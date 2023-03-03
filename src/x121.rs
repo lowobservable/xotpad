@@ -6,6 +6,7 @@ use std::fmt;
 use std::str::FromStr;
 
 /// X.121 address.
+#[derive(PartialEq, Debug)]
 pub struct X121Addr {
     addr: String,
 }
