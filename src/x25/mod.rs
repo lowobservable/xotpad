@@ -8,4 +8,4 @@ pub mod facility;
 pub mod packet;
 
 pub use self::facility::X25Facility;
-pub use self::packet::{MAX_PACKET_LEN, MIN_PACKET_LEN};
+pub use self::packet::{X25Packet, MAX_PACKET_LEN, MIN_PACKET_LEN};

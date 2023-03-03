@@ -20,6 +20,7 @@ pub const MAX_PACKET_LEN: usize = 7 + 4096;
 pub const MAX_CHANNEL: u16 = 4095;
 
 /// X.25 packet.
+#[derive(Debug)]
 pub enum X25Packet {
     CallRequest(X25CallRequest),
 }
@@ -107,6 +108,7 @@ impl X25Packet {
 }
 
 /// X.25 _call request_ packet.
+#[derive(Debug)]
 pub struct X25CallRequest {
     pub modulo: X25Modulo,
     pub channel: u16,
@@ -381,7 +383,7 @@ mod tests {
             called_addr: X121Addr::from_str("1234").unwrap(),
             calling_addr: X121Addr::from_str("567").unwrap(),
             facilities: Vec::new(),
-            call_user_data: Bytes::from_static(b"\x00\x00\x00\x01"),
+            call_user_data: Bytes::from_static(b"\x01\x00\x00\x00"),
         };
 
         let mut buf = BytesMut::new();
@@ -394,7 +396,7 @@ mod tests {
 
         assert_eq!(
             &buf[..],
-            b"\x10\x01\x0b\x34\x12\x34\x56\x70\x00\x00\x00\x00\x01"
+            b"\x10\x01\x0b\x34\x12\x34\x56\x70\x00\x01\x00\x00\x00"
         );
     }
 
@@ -474,7 +476,7 @@ mod tests {
 
     #[test]
     fn decode_call_request_with_call_user_data() {
-        let buf = Bytes::from_static(b"\x10\x01\x0b\x34\x12\x34\x56\x70\x00\x00\x00\x00\x01");
+        let buf = Bytes::from_static(b"\x10\x01\x0b\x34\x12\x34\x56\x70\x00\x01\x00\x00\x00");
 
         let packet = X25Packet::decode(buf);
 
@@ -500,6 +502,6 @@ mod tests {
         );
 
         assert!(call_request.facilities.is_empty());
-        assert_eq!(&call_request.call_user_data[..], b"\x00\x00\x00\x01");
+        assert_eq!(&call_request.call_user_data[..], b"\x01\x00\x00\x00");
     }
 }
