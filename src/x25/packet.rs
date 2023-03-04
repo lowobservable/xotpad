@@ -23,26 +23,40 @@ pub const MAX_CHANNEL: u16 = 4095;
 #[derive(Debug)]
 pub enum X25Packet {
     CallRequest(X25CallRequest),
+    // TODO: CallAccepted,
+    // TODO: ClearRequest,
+    // TODO: ClearConfirmation,
+    // TODO: Data,
+    // TODO: Interrupt
+    // TODO: InterruptConfirmation
+    // TODO: ReceiveReady,
+    // TODO: ReceiveNotReady,
+    // TODO: Reject
+    // TODO: ResetRequest,
+    // TODO: ResetConfirmation,
+    // TODO: RestartRequest
+    // TODO: RestartConfirmation
+    // TODO: Diagnostic,
 }
 
 /// X.25 packet type.
 #[derive(PartialEq, Debug)]
 pub enum X25PacketType {
     CallRequest,
-    CallAccepted,
-    ClearRequest,
-    ClearConfirmation,
-    Data,
+    // TODO: CallAccepted,
+    // TODO: ClearRequest,
+    // TODO: ClearConfirmation,
+    // TODO: Data,
     // TODO: Interrupt
     // TODO: InterruptConfirmation
-    ReceiveReady,
-    ReceiveNotReady,
+    // TODO: ReceiveReady,
+    // TODO: ReceiveNotReady,
     // TODO: Reject
-    ResetRequest,
-    ResetConfirmation,
+    // TODO: ResetRequest,
+    // TODO: ResetConfirmation,
     // TODO: RestartRequest
     // TODO: RestartConfirmation
-    Diagnostic,
+    // TODO: Diagnostic,
 }
 
 /// X.25 packet sequence numbering scheme.
