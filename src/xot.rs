@@ -242,3 +242,12 @@ mod tests {
         assert_eq!(&buf[..], b"\x00");
     }
 }
+
+#[cfg(fuzzing)]
+pub mod fuzzing {
+    use super::*;
+
+    pub fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
+        super::decode(buf)
+    }
+}

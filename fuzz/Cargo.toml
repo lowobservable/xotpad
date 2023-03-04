@@ -26,3 +26,9 @@ name = "x25_packet_decode"
 path = "fuzz_targets/x25_packet_decode.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "xot_decode"
+path = "fuzz_targets/xot_decode.rs"
+test = false
+doc = false
