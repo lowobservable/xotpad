@@ -1,0 +1,28 @@
+[package]
+name = "xotpad-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1.2.0"
+
+[dependencies.xotpad]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "x25_packet_decode"
+path = "fuzz_targets/x25_packet_decode.rs"
+test = false
+doc = false
