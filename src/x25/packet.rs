@@ -23,7 +23,7 @@ pub const MAX_CHANNEL: u16 = 4095;
 #[derive(Debug)]
 pub enum X25Packet {
     CallRequest(X25CallRequest),
-    // TODO: CallAccepted
+    CallAccept(X25CallAccept),
     ClearRequest(X25ClearRequest),
     ClearConfirm(X25ClearConfirm),
     // TODO: Data
@@ -43,7 +43,7 @@ pub enum X25Packet {
 #[derive(PartialEq, Debug)]
 pub enum X25PacketType {
     CallRequest,
-    // TODO: CallAccepted
+    CallAccept,
     ClearRequest,
     ClearConfirm,
     // TODO: Data
@@ -80,6 +80,7 @@ impl X25Packet {
     pub fn packet_type(&self) -> X25PacketType {
         match self {
             X25Packet::CallRequest(_) => X25PacketType::CallRequest,
+            X25Packet::CallAccept(_) => X25PacketType::CallAccept,
             X25Packet::ClearRequest(_) => X25PacketType::ClearRequest,
             X25Packet::ClearConfirm(_) => X25PacketType::ClearConfirm,
         }
@@ -89,6 +90,7 @@ impl X25Packet {
     pub fn modulo(&self) -> X25Modulo {
         match self {
             X25Packet::CallRequest(call_request) => call_request.modulo,
+            X25Packet::CallAccept(call_accepted) => call_accepted.modulo,
             X25Packet::ClearRequest(clear_request) => clear_request.modulo,
             X25Packet::ClearConfirm(clear_confirm) => clear_confirm.modulo,
         }
@@ -98,6 +100,7 @@ impl X25Packet {
     pub fn encode(&self, buf: &mut BytesMut) -> Result<usize, String> {
         match self {
             X25Packet::CallRequest(call_request) => call_request.encode(buf),
+            X25Packet::CallAccept(call_accepted) => call_accepted.encode(buf),
             X25Packet::ClearRequest(clear_request) => clear_request.encode(buf),
             X25Packet::ClearConfirm(clear_confirm) => clear_confirm.encode(buf),
         }
@@ -122,6 +125,10 @@ impl X25Packet {
             let call_request = X25CallRequest::decode(buf, modulo, channel)?;
 
             Ok(X25Packet::CallRequest(call_request))
+        } else if type_ == 0x0f {
+            let call_accepted = X25CallAccept::decode(buf, modulo, channel)?;
+
+            Ok(X25Packet::CallAccept(call_accepted))
         } else if type_ == 0x13 {
             let clear_request = X25ClearRequest::decode(buf, modulo, channel)?;
 
@@ -202,6 +209,93 @@ impl X25CallRequest {
 impl From<X25CallRequest> for X25Packet {
     fn from(call_request: X25CallRequest) -> X25Packet {
         X25Packet::CallRequest(call_request)
+    }
+}
+
+/// X.25 _call accepted_ packet.
+#[derive(Debug)]
+pub struct X25CallAccept {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub called_addr: X121Addr,
+    pub calling_addr: X121Addr,
+    pub facilities: Vec<X25Facility>,
+    pub called_user_data: Bytes,
+}
+
+impl X25CallAccept {
+    /// Encodes this `X25CallAccept` into the buffer provided.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        let mut len = 0;
+
+        len += encode_packet_header(self.modulo, 0, self.channel, 0x0f, buf)?;
+
+        let has_addr = !self.called_addr.is_null() || !self.calling_addr.is_null();
+        let has_facilities = !self.facilities.is_empty();
+        let has_called_user_data = !self.called_user_data.is_empty();
+
+        // When the extended format is used, the address block and the facilities
+        // block must be present.
+        if has_addr || has_facilities || has_called_user_data {
+            len += encode_addr_block(&self.called_addr, &self.calling_addr, buf);
+            len += encode_facilities_block(&self.facilities, buf)?;
+        }
+
+        if has_called_user_data {
+            buf.put_slice(&self.called_user_data);
+            len += self.called_user_data.len();
+        }
+
+        if len > 259 {
+            return Err("packet too big".into());
+        }
+
+        Ok(len)
+    }
+
+    fn decode(mut buf: Bytes, modulo: X25Modulo, channel: u16) -> Result<Self, String> {
+        if buf.len() < 3 {
+            return Err("packet too small".into());
+        }
+
+        if buf.len() > 259 {
+            return Err("packet too big".into());
+        }
+
+        buf.advance(3);
+
+        let (called_addr, calling_addr) = if buf.has_remaining() {
+            decode_addr_block(&mut buf)?
+        } else {
+            (X121Addr::null(), X121Addr::null())
+        };
+
+        let facilities = if buf.has_remaining() {
+            decode_facilities_block(&mut buf)?
+        } else {
+            Vec::new()
+        };
+
+        let called_user_data = if buf.has_remaining() {
+            buf
+        } else {
+            Bytes::new()
+        };
+
+        Ok(X25CallAccept {
+            modulo,
+            channel,
+            called_addr,
+            calling_addr,
+            facilities,
+            called_user_data,
+        })
+    }
+}
+
+impl From<X25CallAccept> for X25Packet {
+    fn from(call_accept: X25CallAccept) -> X25Packet {
+        X25Packet::CallAccept(call_accept)
     }
 }
 
@@ -445,6 +539,7 @@ fn encode_addr_block(called: &X121Addr, calling: &X121Addr, buf: &mut BytesMut) 
 }
 
 fn decode_addr_block(buf: &mut Bytes) -> Result<(X121Addr, X121Addr), String> {
+    #[allow(clippy::len_zero)]
     if buf.len() < 1 {
         return Err("addr block too small".into());
     }
@@ -496,6 +591,7 @@ fn encode_facilities_block(
 }
 
 fn decode_facilities_block(buf: &mut Bytes) -> Result<Vec<X25Facility>, String> {
+    #[allow(clippy::len_zero)]
     if buf.len() < 1 {
         return Err("facilities block too small".into());
     }
@@ -689,6 +785,190 @@ mod tests {
 
         assert!(call_request.facilities.is_empty());
         assert_eq!(&call_request.call_user_data[..], b"\x01\x00\x00\x00");
+    }
+
+    #[test]
+    fn encode_call_accept() {
+        let call_accept = X25CallAccept {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::null(),
+            calling_addr: X121Addr::null(),
+            facilities: Vec::new(),
+            called_user_data: Bytes::new(),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(call_accept.encode(&mut buf), Ok(3));
+
+        assert_eq!(&buf[..], b"\x10\x01\x0f");
+    }
+
+    #[test]
+    fn encode_call_accept_with_addr() {
+        let call_accept = X25CallAccept {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::from_str("1234").unwrap(),
+            calling_addr: X121Addr::from_str("567").unwrap(),
+            facilities: Vec::new(),
+            called_user_data: Bytes::new(),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(call_accept.encode(&mut buf), Ok(9));
+
+        assert_eq!(&buf[..], b"\x10\x01\x0f\x34\x12\x34\x56\x70\x00");
+    }
+
+    #[test]
+    fn encode_call_accept_with_facilities() {
+        let call_accept = X25CallAccept {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::null(),
+            calling_addr: X121Addr::null(),
+            facilities: vec![
+                X25Facility::PacketSize {
+                    from_called: 128,
+                    from_calling: 128,
+                },
+                X25Facility::WindowSize {
+                    from_called: 2,
+                    from_calling: 2,
+                },
+            ],
+            called_user_data: Bytes::new(),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(call_accept.encode(&mut buf), Ok(11));
+
+        assert_eq!(&buf[..], b"\x10\x01\x0f\x00\x06\x42\x07\x07\x43\x02\x02");
+    }
+
+    #[test]
+    fn encode_call_accept_with_called_user_data() {
+        let call_accept = X25CallAccept {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::null(),
+            calling_addr: X121Addr::null(),
+            facilities: Vec::new(),
+            called_user_data: Bytes::from_static(b"\x01\x00\x00\x00"),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(call_accept.encode(&mut buf), Ok(9));
+
+        assert_eq!(&buf[..], b"\x10\x01\x0f\x00\x00\x01\x00\x00\x00");
+    }
+
+    #[test]
+    fn decode_call_accept() {
+        let buf = Bytes::from_static(b"\x10\x01\x0f");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::CallAccept);
+
+        let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+
+        assert_eq!(call_accept.modulo, X25Modulo::Normal);
+        assert_eq!(call_accept.channel, 1);
+        assert!(call_accept.called_addr.is_null());
+        assert!(call_accept.calling_addr.is_null());
+        assert!(call_accept.facilities.is_empty());
+        assert!(call_accept.called_user_data.is_empty());
+    }
+
+    #[test]
+    fn decode_call_accept_with_addr() {
+        let buf = Bytes::from_static(b"\x10\x01\x0f\x34\x12\x34\x56\x70\x00");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::CallAccept);
+
+        let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+
+        assert_eq!(call_accept.modulo, X25Modulo::Normal);
+        assert_eq!(call_accept.channel, 1);
+
+        assert_eq!(call_accept.called_addr, X121Addr::from_str("1234").unwrap());
+
+        assert_eq!(call_accept.calling_addr, X121Addr::from_str("567").unwrap());
+
+        assert!(call_accept.facilities.is_empty());
+        assert!(call_accept.called_user_data.is_empty());
+    }
+
+    #[test]
+    fn decode_call_accept_with_facilities() {
+        let buf = Bytes::from_static(b"\x10\x01\x0f\x00\x06\x42\x07\x07\x43\x02\x02");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::CallAccept);
+
+        let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+
+        assert_eq!(call_accept.modulo, X25Modulo::Normal);
+        assert_eq!(call_accept.channel, 1);
+        assert!(call_accept.called_addr.is_null());
+        assert!(call_accept.calling_addr.is_null());
+
+        let expected_facilities = [
+            X25Facility::PacketSize {
+                from_called: 128,
+                from_calling: 128,
+            },
+            X25Facility::WindowSize {
+                from_called: 2,
+                from_calling: 2,
+            },
+        ];
+
+        assert_eq!(call_accept.facilities, expected_facilities);
+        assert!(call_accept.called_user_data.is_empty());
+    }
+
+    #[test]
+    fn decode_call_accept_with_called_user_data() {
+        let buf = Bytes::from_static(b"\x10\x01\x0f\x00\x00\x01\x00\x00\x00");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::CallAccept);
+
+        let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+
+        assert_eq!(call_accept.modulo, X25Modulo::Normal);
+        assert_eq!(call_accept.channel, 1);
+        assert!(call_accept.called_addr.is_null());
+        assert!(call_accept.calling_addr.is_null());
+        assert!(call_accept.facilities.is_empty());
+        assert_eq!(&call_accept.called_user_data[..], b"\x01\x00\x00\x00");
     }
 
     #[test]

@@ -33,6 +33,7 @@ impl X121Addr {
     }
 
     /// Returns the number of digits.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.addr.len()
     }

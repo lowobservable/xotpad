@@ -5,7 +5,9 @@ use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
 
 use xotpad::x121::X121Addr;
-use xotpad::x25::{X25CallRequest, X25ClearRequest, X25Modulo, X25Packet, X25PacketType};
+use xotpad::x25::{
+    X25CallAccept, X25CallRequest, X25ClearRequest, X25Modulo, X25Packet, X25PacketType,
+};
 use xotpad::xot::{self, XotLink};
 
 fn to_other_io_error(e: String) -> io::Error {
@@ -33,6 +35,19 @@ fn call_request(link: &mut XotLink, addr: &X121Addr) -> io::Result<()> {
     };
 
     send(link, &call_request.into())
+}
+
+fn call_accept(link: &mut XotLink) -> io::Result<()> {
+    let call_accept = X25CallAccept {
+        modulo: X25Modulo::Normal,
+        channel: 1,
+        called_addr: X121Addr::null(),
+        calling_addr: X121Addr::null(),
+        facilities: Vec::new(),
+        called_user_data: Bytes::new(),
+    };
+
+    send(link, &call_accept.into())
 }
 
 fn clear_request(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Result<()> {
@@ -86,11 +101,17 @@ fn main() -> io::Result<()> {
 
                 println!("{:?}", x25_packet);
 
-                if x25_packet.packet_type() == X25PacketType::ClearConfirm {
-                    break;
+                match x25_packet {
+                    X25Packet::CallRequest(call_request) => {
+                        if call_request.called_addr == X121Addr::from_str("73720299").unwrap() {
+                            call_accept(&mut xot_link)?;
+                        } else {
+                            clear_request(&mut xot_link, 0, 0)?;
+                        }
+                    }
+                    X25Packet::ClearConfirm(_) => break,
+                    _ => todo!(),
                 }
-
-                clear_request(&mut xot_link, 0, 0)?;
             }
 
             println!("done with this link!");
