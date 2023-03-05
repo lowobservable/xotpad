@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
 
 use xotpad::x121::X121Addr;
-use xotpad::x25::{X25CallRequest, X25ClearRequest, X25Modulo, X25Packet};
+use xotpad::x25::{X25CallRequest, X25ClearRequest, X25Modulo, X25Packet, X25PacketType};
 use xotpad::xot::{self, XotLink};
 
 fn to_other_io_error(e: String) -> io::Error {
@@ -20,7 +20,7 @@ fn send(link: &mut XotLink, packet: &X25Packet) -> io::Result<()> {
     link.send(&buf)
 }
 
-fn call(link: &mut XotLink, addr: &X121Addr) -> io::Result<()> {
+fn call_request(link: &mut XotLink, addr: &X121Addr) -> io::Result<()> {
     let calling_addr = X121Addr::from_str("73720201").unwrap();
 
     let call_request = X25CallRequest {
@@ -35,7 +35,7 @@ fn call(link: &mut XotLink, addr: &X121Addr) -> io::Result<()> {
     send(link, &call_request.into())
 }
 
-fn clear(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Result<()> {
+fn clear_request(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Result<()> {
     let clear_request = X25ClearRequest {
         modulo: X25Modulo::Normal,
         channel: 1,
@@ -58,7 +58,7 @@ fn main() -> io::Result<()> {
 
         let mut xot_link = XotLink::new(tcp_stream);
 
-        call(&mut xot_link, &X121Addr::from_str("73710301").unwrap())?;
+        call_request(&mut xot_link, &X121Addr::from_str("73710301").unwrap())?;
 
         loop {
             let x25_packet = xot_link.recv()?;
@@ -69,7 +69,7 @@ fn main() -> io::Result<()> {
 
             println!("{:?}", x25_packet);
 
-            clear(&mut xot_link, 0, 0)?;
+            clear_request(&mut xot_link, 0, 0)?;
         }
     } else if args[1] == "listen" {
         let tcp_listener = TcpListener::bind("0.0.0.0:1998")?;
@@ -86,8 +86,14 @@ fn main() -> io::Result<()> {
 
                 println!("{:?}", x25_packet);
 
-                clear(&mut xot_link, 0, 0)?;
+                if x25_packet.packet_type() == X25PacketType::ClearConfirm {
+                    break;
+                }
+
+                clear_request(&mut xot_link, 0, 0)?;
             }
+
+            println!("done with this link!");
         }
     }
 

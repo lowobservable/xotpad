@@ -23,40 +23,40 @@ pub const MAX_CHANNEL: u16 = 4095;
 #[derive(Debug)]
 pub enum X25Packet {
     CallRequest(X25CallRequest),
-    // TODO: CallAccepted,
+    // TODO: CallAccepted
     ClearRequest(X25ClearRequest),
-    // TODO: ClearConfirmation,
-    // TODO: Data,
+    ClearConfirm(X25ClearConfirm),
+    // TODO: Data
     // TODO: Interrupt
-    // TODO: InterruptConfirmation
-    // TODO: ReceiveReady,
-    // TODO: ReceiveNotReady,
+    // TODO: InterruptConfirm
+    // TODO: ReceiveReady
+    // TODO: ReceiveNotReady
     // TODO: Reject
-    // TODO: ResetRequest,
-    // TODO: ResetConfirmation,
+    // TODO: ResetRequest
+    // TODO: ResetConfirm
     // TODO: RestartRequest
-    // TODO: RestartConfirmation
-    // TODO: Diagnostic,
+    // TODO: RestartConfirm
+    // TODO: Diagnostic
 }
 
 /// X.25 packet type.
 #[derive(PartialEq, Debug)]
 pub enum X25PacketType {
     CallRequest,
-    // TODO: CallAccepted,
+    // TODO: CallAccepted
     ClearRequest,
-    // TODO: ClearConfirmation,
-    // TODO: Data,
+    ClearConfirm,
+    // TODO: Data
     // TODO: Interrupt
-    // TODO: InterruptConfirmation
-    // TODO: ReceiveReady,
-    // TODO: ReceiveNotReady,
+    // TODO: InterruptConfirm
+    // TODO: ReceiveReady
+    // TODO: ReceiveNotReady
     // TODO: Reject
-    // TODO: ResetRequest,
-    // TODO: ResetConfirmation,
+    // TODO: ResetRequest
+    // TODO: ResetConfirm
     // TODO: RestartRequest
-    // TODO: RestartConfirmation
-    // TODO: Diagnostic,
+    // TODO: RestartConfirm
+    // TODO: Diagnostic
 }
 
 /// X.25 packet sequence numbering scheme.
@@ -81,6 +81,7 @@ impl X25Packet {
         match self {
             X25Packet::CallRequest(_) => X25PacketType::CallRequest,
             X25Packet::ClearRequest(_) => X25PacketType::ClearRequest,
+            X25Packet::ClearConfirm(_) => X25PacketType::ClearConfirm,
         }
     }
 
@@ -89,6 +90,7 @@ impl X25Packet {
         match self {
             X25Packet::CallRequest(call_request) => call_request.modulo,
             X25Packet::ClearRequest(clear_request) => clear_request.modulo,
+            X25Packet::ClearConfirm(clear_confirm) => clear_confirm.modulo,
         }
     }
 
@@ -97,6 +99,7 @@ impl X25Packet {
         match self {
             X25Packet::CallRequest(call_request) => call_request.encode(buf),
             X25Packet::ClearRequest(clear_request) => clear_request.encode(buf),
+            X25Packet::ClearConfirm(clear_confirm) => clear_confirm.encode(buf),
         }
     }
 
@@ -112,9 +115,10 @@ impl X25Packet {
 
         let (modulo, gfi, channel, type_) = decode_packet_header(&buf)?;
 
-        if type_ & 0x01 == 0x00 {
+        /*if type_ & 0x01 == 0x00 {
             todo!("DATA")
-        } else if type_ == 0x0b {
+        } else*/
+        if type_ == 0x0b {
             let call_request = X25CallRequest::decode(buf, modulo, channel)?;
 
             Ok(X25Packet::CallRequest(call_request))
@@ -122,6 +126,10 @@ impl X25Packet {
             let clear_request = X25ClearRequest::decode(buf, modulo, channel)?;
 
             Ok(X25Packet::ClearRequest(clear_request))
+        } else if type_ == 0x17 {
+            let clear_confirm = X25ClearConfirm::decode(buf, modulo, channel)?;
+
+            Ok(X25Packet::ClearConfirm(clear_confirm))
         } else {
             Err("unsupported packet type".into())
         }
@@ -298,6 +306,80 @@ impl X25ClearRequest {
 impl From<X25ClearRequest> for X25Packet {
     fn from(clear_request: X25ClearRequest) -> X25Packet {
         X25Packet::ClearRequest(clear_request)
+    }
+}
+
+/// X.25 _clear confirmation_ packet.
+#[derive(Debug)]
+pub struct X25ClearConfirm {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub called_addr: X121Addr,
+    pub calling_addr: X121Addr,
+    pub facilities: Vec<X25Facility>,
+}
+
+impl X25ClearConfirm {
+    /// Encodes this `X25ClearConfirm` into the buffer provided.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        let mut len = 0;
+
+        len += encode_packet_header(self.modulo, 0, self.channel, 0x17, buf)?;
+
+        let has_addr = !self.called_addr.is_null() || !self.calling_addr.is_null();
+        let has_facilities = !self.facilities.is_empty();
+
+        if has_addr || has_facilities {
+            len += encode_addr_block(&self.called_addr, &self.calling_addr, buf);
+        }
+
+        if has_facilities {
+            len += encode_facilities_block(&self.facilities, buf)?;
+        }
+
+        if len > 259 {
+            return Err("packet too big".into());
+        }
+
+        Ok(len)
+    }
+
+    fn decode(mut buf: Bytes, modulo: X25Modulo, channel: u16) -> Result<Self, String> {
+        if buf.len() < 3 {
+            return Err("packet too small".into());
+        }
+
+        if buf.len() > 259 {
+            return Err("packet too big".into());
+        }
+
+        buf.advance(3);
+
+        let (called_addr, calling_addr) = if buf.has_remaining() {
+            decode_addr_block(&mut buf)?
+        } else {
+            (X121Addr::null(), X121Addr::null())
+        };
+
+        let facilities = if buf.has_remaining() {
+            decode_facilities_block(&mut buf)?
+        } else {
+            Vec::new()
+        };
+
+        Ok(X25ClearConfirm {
+            modulo,
+            channel,
+            called_addr,
+            calling_addr,
+            facilities,
+        })
+    }
+}
+
+impl From<X25ClearConfirm> for X25Packet {
+    fn from(clear_confirm: X25ClearConfirm) -> X25Packet {
+        X25Packet::ClearConfirm(clear_confirm)
     }
 }
 
@@ -650,7 +732,7 @@ mod tests {
     }
 
     #[test]
-    fn encode_clear_request_with_addrs() {
+    fn encode_clear_request_with_addr() {
         let clear_request = X25ClearRequest {
             modulo: X25Modulo::Normal,
             channel: 1,
@@ -770,7 +852,7 @@ mod tests {
     }
 
     #[test]
-    fn decode_clear_request_with_addrs() {
+    fn decode_clear_request_with_addr() {
         let buf = Bytes::from_static(b"\x10\x01\x13\x01\x00\x34\x12\x34\x56\x70\x00");
 
         let packet = X25Packet::decode(buf);
@@ -860,5 +942,149 @@ mod tests {
         assert!(clear_request.calling_addr.is_null());
         assert!(clear_request.facilities.is_empty());
         assert_eq!(&clear_request.clear_user_data[..], b"\x01\x00\x00\x00");
+    }
+
+    #[test]
+    fn encode_clear_confirm() {
+        let clear_confirm = X25ClearConfirm {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::null(),
+            calling_addr: X121Addr::null(),
+            facilities: Vec::new(),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(clear_confirm.encode(&mut buf), Ok(3));
+
+        assert_eq!(&buf[..], b"\x10\x01\x17");
+    }
+
+    #[test]
+    fn encode_clear_confirm_with_addr() {
+        let clear_confirm = X25ClearConfirm {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::from_str("1234").unwrap(),
+            calling_addr: X121Addr::from_str("567").unwrap(),
+            facilities: Vec::new(),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(clear_confirm.encode(&mut buf), Ok(8));
+
+        assert_eq!(&buf[..], b"\x10\x01\x17\x34\x12\x34\x56\x70");
+    }
+
+    #[test]
+    fn encode_clear_confirm_with_facilities() {
+        let clear_confirm = X25ClearConfirm {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            called_addr: X121Addr::null(),
+            calling_addr: X121Addr::null(),
+            facilities: vec![
+                X25Facility::PacketSize {
+                    from_called: 128,
+                    from_calling: 128,
+                },
+                X25Facility::WindowSize {
+                    from_called: 2,
+                    from_calling: 2,
+                },
+            ],
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(clear_confirm.encode(&mut buf), Ok(11));
+
+        assert_eq!(&buf[..], b"\x10\x01\x17\x00\x06\x42\x07\x07\x43\x02\x02");
+    }
+
+    #[test]
+    fn decode_clear_confirm() {
+        let buf = Bytes::from_static(b"\x10\x01\x17");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::ClearConfirm);
+
+        let X25Packet::ClearConfirm(clear_confirm) = packet else { unreachable!() };
+
+        assert_eq!(clear_confirm.modulo, X25Modulo::Normal);
+        assert_eq!(clear_confirm.channel, 1);
+        assert!(clear_confirm.called_addr.is_null());
+        assert!(clear_confirm.calling_addr.is_null());
+        assert!(clear_confirm.facilities.is_empty());
+    }
+
+    #[test]
+    fn decode_clear_confirm_with_addr() {
+        let buf = Bytes::from_static(b"\x10\x01\x17\x34\x12\x34\x56\x70");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::ClearConfirm);
+
+        let X25Packet::ClearConfirm(clear_confirm) = packet else { unreachable!() };
+
+        assert_eq!(clear_confirm.modulo, X25Modulo::Normal);
+        assert_eq!(clear_confirm.channel, 1);
+
+        assert_eq!(
+            clear_confirm.called_addr,
+            X121Addr::from_str("1234").unwrap()
+        );
+
+        assert_eq!(
+            clear_confirm.calling_addr,
+            X121Addr::from_str("567").unwrap()
+        );
+
+        assert!(clear_confirm.facilities.is_empty());
+    }
+
+    #[test]
+    fn decode_clear_confirm_with_facilities() {
+        let buf = Bytes::from_static(b"\x10\x01\x17\x00\x06\x42\x07\x07\x43\x02\x02");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::ClearConfirm);
+
+        let X25Packet::ClearConfirm(clear_confirm) = packet else { unreachable!() };
+
+        assert_eq!(clear_confirm.modulo, X25Modulo::Normal);
+        assert_eq!(clear_confirm.channel, 1);
+        assert!(clear_confirm.called_addr.is_null());
+        assert!(clear_confirm.calling_addr.is_null());
+
+        let expected_facilities = [
+            X25Facility::PacketSize {
+                from_called: 128,
+                from_calling: 128,
+            },
+            X25Facility::WindowSize {
+                from_called: 2,
+                from_calling: 2,
+            },
+        ];
+
+        assert_eq!(clear_confirm.facilities, expected_facilities);
     }
 }
