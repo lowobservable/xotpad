@@ -334,11 +334,7 @@ mod tests {
 
         let mut buf = BytesMut::new();
 
-        let len = super::encode_facilities(&facilities, &mut buf);
-
-        assert!(len.is_ok());
-
-        assert_eq!(len.unwrap(), 3 + 3 + 2 + 3 + 4 + 6);
+        assert_eq!(super::encode_facilities(&facilities, &mut buf), Ok(21));
 
         assert_eq!(
             &buf[..],
@@ -352,11 +348,7 @@ mod tests {
             b"\x42\x07\x0a\x43\x02\x04\x01\x12\x41\x12\x34\x81\x12\x34\x56\xc1\x04\x12\x34\x56\x78",
         );
 
-        let facilities = super::decode_facilities(buf);
-
-        assert!(facilities.is_ok());
-
-        let expected_facilities = [
+        let expected_facilities = vec![
             X25Facility::PacketSize {
                 from_called: 128,
                 from_calling: 1024,
@@ -371,6 +363,6 @@ mod tests {
             X25Facility::ClassD(0xc1, Bytes::from_static(b"\x12\x34\x56\x78")),
         ];
 
-        assert_eq!(facilities.unwrap(), expected_facilities);
+        assert_eq!(super::decode_facilities(buf), Ok(expected_facilities));
     }
 }

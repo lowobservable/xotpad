@@ -24,7 +24,7 @@ pub struct XotLink {
 impl XotLink {
     /// Creates a new `XotLink` over the underlying `TcpStream`.
     pub fn new(stream: TcpStream) -> Self {
-        Self {
+        XotLink {
             stream,
             recv_buf: BytesMut::new(),
         }

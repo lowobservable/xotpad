@@ -6,12 +6,17 @@ use std::fmt;
 use std::str::FromStr;
 
 /// X.121 address.
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct X121Addr {
     addr: String,
 }
 
 impl X121Addr {
+    /// Creates a new null `X121Addr`.
+    pub fn null() -> Self {
+        X121Addr { addr: "".into() }
+    }
+
     /// Creates a new `X121Addr` from digits.
     pub fn from_digits(digits: &[u8]) -> Result<Self, String> {
         if digits.len() > 15 {
@@ -24,7 +29,7 @@ impl X121Addr {
 
         let addr: String = digits.iter().map(|d| d.to_string()).collect();
 
-        Self::from_str(&addr)
+        X121Addr::from_str(&addr)
     }
 
     /// Returns the number of digits.
@@ -62,7 +67,7 @@ impl FromStr for X121Addr {
             return Err("all characters must be digits between 0 and 9".into());
         }
 
-        Ok(Self { addr: s.into() })
+        Ok(X121Addr { addr: s.into() })
     }
 }
 
@@ -136,7 +141,7 @@ mod tests {
 
     #[test]
     fn is_null_true() {
-        let addr = X121Addr::from_str("").unwrap();
+        let addr = X121Addr::null();
 
         assert!(addr.is_null());
     }
