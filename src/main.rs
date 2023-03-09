@@ -7,6 +7,7 @@ use std::str::FromStr;
 use xotpad::x121::X121Addr;
 use xotpad::x25::{
     X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Modulo, X25Packet,
+    X25ResetConfirm, X25ResetRequest,
 };
 use xotpad::xot::{self, XotLink};
 
@@ -92,6 +93,26 @@ fn send_data(link: &mut XotLink, send_seq: u8, recv_seq: u8, user_data: Bytes) -
     send(link, &data.into())
 }
 
+fn send_reset_request(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Result<()> {
+    let reset_request = X25ResetRequest {
+        modulo: X25Modulo::Normal,
+        channel: 1,
+        cause,
+        diagnostic_code,
+    };
+
+    send(link, &reset_request.into())
+}
+
+fn send_reset_confirm(link: &mut XotLink) -> io::Result<()> {
+    let reset_confirm = X25ResetConfirm {
+        modulo: X25Modulo::Normal,
+        channel: 1,
+    };
+
+    send(link, &reset_confirm.into())
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
@@ -156,7 +177,10 @@ fn main() -> io::Result<()> {
                     X25Packet::ResetRequest(_) => {
                         send_seq = 0;
 
-                        todo!();
+                        send_reset_confirm(&mut xot_link)?;
+                    }
+                    X25Packet::ResetConfirm(_) => {
+                        send_seq = 0;
                     }
                     _ => unimplemented!(),
                 }

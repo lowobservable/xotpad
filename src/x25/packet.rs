@@ -33,7 +33,7 @@ pub enum X25Packet {
     // TODO: ReceiveNotReady
     // TODO: Reject
     ResetRequest(X25ResetRequest),
-    // TODO: ResetConfirm
+    ResetConfirm(X25ResetConfirm),
     // TODO: RestartRequest
     // TODO: RestartConfirm
     // TODO: Diagnostic
@@ -53,7 +53,7 @@ pub enum X25PacketType {
     // TODO: ReceiveNotReady
     // TODO: Reject
     ResetRequest,
-    // TODO: ResetConfirm
+    ResetConfirm,
     // TODO: RestartRequest
     // TODO: RestartConfirm
     // TODO: Diagnostic
@@ -86,6 +86,7 @@ impl X25Packet {
             X25Packet::Data(_) => X25PacketType::Data,
             X25Packet::ReceiveReady(_) => X25PacketType::ReceiveReady,
             X25Packet::ResetRequest(_) => X25PacketType::ResetRequest,
+            X25Packet::ResetConfirm(_) => X25PacketType::ResetConfirm,
         }
     }
 
@@ -99,6 +100,7 @@ impl X25Packet {
             X25Packet::Data(data) => data.modulo,
             X25Packet::ReceiveReady(receive_ready) => receive_ready.modulo,
             X25Packet::ResetRequest(reset_request) => reset_request.modulo,
+            X25Packet::ResetConfirm(reset_confirm) => reset_confirm.modulo,
         }
     }
 
@@ -112,6 +114,7 @@ impl X25Packet {
             X25Packet::Data(data) => data.encode(buf),
             X25Packet::ReceiveReady(receive_ready) => receive_ready.encode(buf),
             X25Packet::ResetRequest(reset_request) => reset_request.encode(buf),
+            X25Packet::ResetConfirm(reset_confirm) => reset_confirm.encode(buf),
         }
     }
 
@@ -155,6 +158,10 @@ impl X25Packet {
             let reset_request = X25ResetRequest::decode(buf, modulo, gfi, channel, type_)?;
 
             Ok(X25Packet::ResetRequest(reset_request))
+        } else if type_ == 0x1f {
+            let reset_confirm = X25ResetConfirm::decode(buf, modulo, gfi, channel, type_)?;
+
+            Ok(X25Packet::ResetConfirm(reset_confirm))
         } else {
             Err("unsupported packet type".into())
         }
@@ -840,6 +847,49 @@ impl From<X25ResetRequest> for X25Packet {
     }
 }
 
+/// X.25 _reset confirmation_ packet.
+#[derive(Debug)]
+pub struct X25ResetConfirm {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+}
+
+impl X25ResetConfirm {
+    /// Encodes this `X25ResetConfirm` into the buffer provided.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        encode_packet_header(self.modulo, 0, self.channel, 0x1f, buf)
+    }
+
+    fn decode(
+        buf: Bytes,
+        modulo: X25Modulo,
+        gfi: u8,
+        channel: u16,
+        type_: u8,
+    ) -> Result<Self, String> {
+        assert_eq!(type_, 0x1f);
+
+        if buf.len() < 3 {
+            return Err("packet too short".into());
+        }
+
+        if buf.len() > 3 {
+            return Err("packet too long".into());
+        }
+
+        if (gfi & 0x0c) != 0x00 {
+            return Err("invalid general format identifier".into());
+        }
+
+        Ok(X25ResetConfirm { modulo, channel })
+    }
+}
+
+impl From<X25ResetConfirm> for X25Packet {
+    fn from(reset_confirm: X25ResetConfirm) -> X25Packet {
+        X25Packet::ResetConfirm(reset_confirm)
+    }
+}
 fn encode_packet_header(
     modulo: X25Modulo,
     gfi_overlay: u8,
@@ -2045,5 +2095,37 @@ mod tests {
         assert_eq!(reset_request.channel, 1);
         assert_eq!(reset_request.cause, 5);
         assert_eq!(reset_request.diagnostic_code, 1);
+    }
+
+    #[test]
+    fn encode_reset_confirm() {
+        let reset_confirm = X25ResetConfirm {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(reset_confirm.encode(&mut buf), Ok(3));
+
+        assert_eq!(&buf[..], b"\x10\x01\x1f");
+    }
+
+    #[test]
+    fn decode_reset_confirm() {
+        let buf = Bytes::from_static(b"\x10\x01\x1f");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::ResetConfirm);
+
+        let X25Packet::ResetConfirm(reset_confirm) = packet else { unreachable!() };
+
+        assert_eq!(reset_confirm.modulo, X25Modulo::Normal);
+        assert_eq!(reset_confirm.channel, 1);
     }
 }
