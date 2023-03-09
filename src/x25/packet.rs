@@ -26,7 +26,7 @@ pub enum X25Packet {
     CallAccept(X25CallAccept),
     ClearRequest(X25ClearRequest),
     ClearConfirm(X25ClearConfirm),
-    // TODO: Data
+    Data(X25Data),
     // TODO: Interrupt
     // TODO: InterruptConfirm
     // TODO: ReceiveReady
@@ -46,7 +46,7 @@ pub enum X25PacketType {
     CallAccept,
     ClearRequest,
     ClearConfirm,
-    // TODO: Data
+    Data,
     // TODO: Interrupt
     // TODO: InterruptConfirm
     // TODO: ReceiveReady
@@ -83,6 +83,7 @@ impl X25Packet {
             X25Packet::CallAccept(_) => X25PacketType::CallAccept,
             X25Packet::ClearRequest(_) => X25PacketType::ClearRequest,
             X25Packet::ClearConfirm(_) => X25PacketType::ClearConfirm,
+            X25Packet::Data(_) => X25PacketType::Data,
         }
     }
 
@@ -93,6 +94,7 @@ impl X25Packet {
             X25Packet::CallAccept(call_accepted) => call_accepted.modulo,
             X25Packet::ClearRequest(clear_request) => clear_request.modulo,
             X25Packet::ClearConfirm(clear_confirm) => clear_confirm.modulo,
+            X25Packet::Data(data) => data.modulo,
         }
     }
 
@@ -103,40 +105,42 @@ impl X25Packet {
             X25Packet::CallAccept(call_accepted) => call_accepted.encode(buf),
             X25Packet::ClearRequest(clear_request) => clear_request.encode(buf),
             X25Packet::ClearConfirm(clear_confirm) => clear_confirm.encode(buf),
+            X25Packet::Data(data) => data.encode(buf),
         }
     }
 
     /// Decodes an `X25Packet` from the buffer provided.
     pub fn decode(buf: Bytes) -> Result<Self, String> {
         if buf.len() < MIN_PACKET_LEN {
-            return Err("packet too small".into());
+            return Err("packet too short".into());
         }
 
         if buf.len() > MAX_PACKET_LEN {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         let (modulo, gfi, channel, type_) = decode_packet_header(&buf)?;
 
-        /*if type_ & 0x01 == 0x00 {
-            todo!("DATA")
-        } else*/
         if type_ == 0x0b {
-            let call_request = X25CallRequest::decode(buf, modulo, channel)?;
+            let call_request = X25CallRequest::decode(buf, modulo, gfi, channel, type_)?;
 
             Ok(X25Packet::CallRequest(call_request))
         } else if type_ == 0x0f {
-            let call_accepted = X25CallAccept::decode(buf, modulo, channel)?;
+            let call_accepted = X25CallAccept::decode(buf, modulo, gfi, channel, type_)?;
 
             Ok(X25Packet::CallAccept(call_accepted))
         } else if type_ == 0x13 {
-            let clear_request = X25ClearRequest::decode(buf, modulo, channel)?;
+            let clear_request = X25ClearRequest::decode(buf, modulo, gfi, channel, type_)?;
 
             Ok(X25Packet::ClearRequest(clear_request))
         } else if type_ == 0x17 {
-            let clear_confirm = X25ClearConfirm::decode(buf, modulo, channel)?;
+            let clear_confirm = X25ClearConfirm::decode(buf, modulo, gfi, channel, type_)?;
 
             Ok(X25Packet::ClearConfirm(clear_confirm))
+        } else if type_ & 0x01 == 0x00 {
+            let data = X25Data::decode(buf, modulo, gfi, channel, type_)?;
+
+            Ok(X25Packet::Data(data))
         } else {
             Err("unsupported packet type".into())
         }
@@ -169,19 +173,27 @@ impl X25CallRequest {
         }
 
         if len > 259 {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         Ok(len)
     }
 
-    fn decode(mut buf: Bytes, modulo: X25Modulo, channel: u16) -> Result<Self, String> {
+    fn decode(
+        mut buf: Bytes,
+        modulo: X25Modulo,
+        _gfi: u8,
+        channel: u16,
+        type_: u8,
+    ) -> Result<Self, String> {
+        assert_eq!(type_, 0x0b);
+
         if buf.len() < 5 {
-            return Err("packet too small".into());
+            return Err("packet too short".into());
         }
 
         if buf.len() > 259 {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         buf.advance(3);
@@ -247,19 +259,27 @@ impl X25CallAccept {
         }
 
         if len > 259 {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         Ok(len)
     }
 
-    fn decode(mut buf: Bytes, modulo: X25Modulo, channel: u16) -> Result<Self, String> {
+    fn decode(
+        mut buf: Bytes,
+        modulo: X25Modulo,
+        _gfi: u8,
+        channel: u16,
+        type_: u8,
+    ) -> Result<Self, String> {
+        assert_eq!(type_, 0x0f);
+
         if buf.len() < 3 {
-            return Err("packet too small".into());
+            return Err("packet too short".into());
         }
 
         if buf.len() > 259 {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         buf.advance(3);
@@ -345,19 +365,31 @@ impl X25ClearRequest {
         }
 
         if len > 259 {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         Ok(len)
     }
 
-    fn decode(mut buf: Bytes, modulo: X25Modulo, channel: u16) -> Result<Self, String> {
+    fn decode(
+        mut buf: Bytes,
+        modulo: X25Modulo,
+        gfi: u8,
+        channel: u16,
+        type_: u8,
+    ) -> Result<Self, String> {
+        assert_eq!(type_, 0x13);
+
+        if (gfi & 0x04) != 0 {
+            return Err("invalid general format identifier".into());
+        }
+
         if buf.len() < 4 {
-            return Err("packet too small".into());
+            return Err("packet too short".into());
         }
 
         if buf.len() > 259 {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         buf.advance(3);
@@ -432,19 +464,31 @@ impl X25ClearConfirm {
         }
 
         if len > 259 {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         Ok(len)
     }
 
-    fn decode(mut buf: Bytes, modulo: X25Modulo, channel: u16) -> Result<Self, String> {
+    fn decode(
+        mut buf: Bytes,
+        modulo: X25Modulo,
+        gfi: u8,
+        channel: u16,
+        type_: u8,
+    ) -> Result<Self, String> {
+        assert_eq!(type_, 0x17);
+
+        if (gfi & 0x04) != 0 {
+            return Err("invalid general format identifier".into());
+        }
+
         if buf.len() < 3 {
-            return Err("packet too small".into());
+            return Err("packet too short".into());
         }
 
         if buf.len() > 259 {
-            return Err("packet too big".into());
+            return Err("packet too long".into());
         }
 
         buf.advance(3);
@@ -474,6 +518,147 @@ impl X25ClearConfirm {
 impl From<X25ClearConfirm> for X25Packet {
     fn from(clear_confirm: X25ClearConfirm) -> X25Packet {
         X25Packet::ClearConfirm(clear_confirm)
+    }
+}
+
+/// X.25 _data_ packet.
+#[derive(Debug)]
+pub struct X25Data {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub send_seq: u8,
+    pub recv_seq: u8,
+    pub qualifier: bool,
+    pub delivery: bool,
+    pub more: bool,
+    pub user_data: Bytes,
+}
+
+impl X25Data {
+    /// Encodes this `X25Data` into the buffer provided.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        match self.modulo {
+            X25Modulo::Normal => self.encode_normal(buf),
+            X25Modulo::Extended => self.encode_extended(buf),
+        }
+    }
+
+    fn decode(
+        buf: Bytes,
+        modulo: X25Modulo,
+        gfi: u8,
+        channel: u16,
+        type_: u8,
+    ) -> Result<Self, String> {
+        assert_eq!(type_ & 0x01, 0x00);
+
+        match modulo {
+            X25Modulo::Normal => X25Data::decode_normal(buf, gfi, channel),
+            X25Modulo::Extended => X25Data::decode_extended(buf, gfi, channel),
+        }
+    }
+
+    fn encode_normal(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        if self.send_seq > 7 {
+            return Err("send sequence out of range".into());
+        }
+
+        if self.recv_seq > 7 {
+            return Err("receive sequence out of range".into());
+        }
+
+        let mut len = 0;
+
+        let gfi_overlay = (self.qualifier as u8) << 3 | (self.delivery as u8) << 2;
+        let type_ = self.recv_seq << 5 | (self.more as u8) << 4 | self.send_seq << 1;
+
+        len += encode_packet_header(self.modulo, gfi_overlay, self.channel, type_, buf)?;
+
+        buf.put_slice(&self.user_data);
+        len += self.user_data.len();
+
+        Ok(len)
+    }
+
+    fn decode_normal(mut buf: Bytes, gfi: u8, channel: u16) -> Result<Self, String> {
+        if buf.len() < 3 {
+            return Err("packet too short".into());
+        }
+
+        let qualifier = (gfi & 0x08) >> 3 == 1;
+        let delivery = (gfi & 0x04) >> 2 == 1;
+        let send_seq = (buf[2] & 0x0e) >> 1;
+        let recv_seq = (buf[2] & 0xe0) >> 5;
+        let more = (buf[2] & 0x10) >> 4 == 1;
+
+        buf.advance(3);
+
+        Ok(X25Data {
+            modulo: X25Modulo::Normal,
+            channel,
+            send_seq,
+            recv_seq,
+            qualifier,
+            delivery,
+            more,
+            user_data: buf,
+        })
+    }
+
+    fn encode_extended(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        if self.send_seq > 127 {
+            return Err("send sequence out of range".into());
+        }
+
+        if self.recv_seq > 127 {
+            return Err("receive sequence out of range".into());
+        }
+
+        let mut len = 0;
+
+        let gfi_overlay = (self.qualifier as u8) << 3 | (self.delivery as u8) << 2;
+        let type_ = self.send_seq << 1;
+
+        len += encode_packet_header(self.modulo, gfi_overlay, self.channel, type_, buf)?;
+
+        buf.put_u8(self.recv_seq << 1 | self.more as u8);
+        len += 1;
+
+        buf.put_slice(&self.user_data);
+        len += self.user_data.len();
+
+        Ok(len)
+    }
+
+    fn decode_extended(mut buf: Bytes, gfi: u8, channel: u16) -> Result<Self, String> {
+        if buf.len() < 4 {
+            return Err("packet too short".into());
+        }
+
+        let qualifier = (gfi & 0x08) >> 3 == 1;
+        let delivery = (gfi & 0x04) >> 2 == 1;
+        let send_seq = (buf[2] & 0xfe) >> 1;
+        let recv_seq = (buf[3] & 0xfe) >> 1;
+        let more = (buf[3] & 0x01) == 1;
+
+        buf.advance(4);
+
+        Ok(X25Data {
+            modulo: X25Modulo::Extended,
+            channel,
+            send_seq,
+            recv_seq,
+            qualifier,
+            delivery,
+            more,
+            user_data: buf,
+        })
+    }
+}
+
+impl From<X25Data> for X25Packet {
+    fn from(data: X25Data) -> X25Packet {
+        X25Packet::Data(data)
     }
 }
 
@@ -541,7 +726,7 @@ fn encode_addr_block(called: &X121Addr, calling: &X121Addr, buf: &mut BytesMut) 
 fn decode_addr_block(buf: &mut Bytes) -> Result<(X121Addr, X121Addr), String> {
     #[allow(clippy::len_zero)]
     if buf.len() < 1 {
-        return Err("addr block too small".into());
+        return Err("addr block too short".into());
     }
 
     let len = buf.get_u8();
@@ -554,7 +739,7 @@ fn decode_addr_block(buf: &mut Bytes) -> Result<(X121Addr, X121Addr), String> {
     let len = (len / 2) + (len % 2);
 
     if buf.len() < len {
-        return Err("addr block too small".into());
+        return Err("addr block too short".into());
     }
 
     let addr_buf = buf.split_to(len);
@@ -581,7 +766,7 @@ fn encode_facilities_block(
     let len = encode_facilities(facilities, &mut facilities_buf)?;
 
     if len > 255 {
-        return Err("facilities too big".into());
+        return Err("facilities too long".into());
     }
 
     buf.put_u8(len as u8);
@@ -593,13 +778,13 @@ fn encode_facilities_block(
 fn decode_facilities_block(buf: &mut Bytes) -> Result<Vec<X25Facility>, String> {
     #[allow(clippy::len_zero)]
     if buf.len() < 1 {
-        return Err("facilities block too small".into());
+        return Err("facilities block too short".into());
     }
 
     let len = buf.get_u8() as usize;
 
     if buf.len() < len {
-        return Err("facilities block too small".into());
+        return Err("facilities block too short".into());
     }
 
     let facilities_buf = buf.split_to(len);
@@ -1366,5 +1551,181 @@ mod tests {
         ];
 
         assert_eq!(clear_confirm.facilities, expected_facilities);
+    }
+
+    #[test]
+    fn encode_normal_data() {
+        let data = X25Data {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            send_seq: 5,
+            recv_seq: 7,
+            qualifier: false,
+            delivery: false,
+            more: false,
+            user_data: Bytes::from_static(b"testing"),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(data.encode(&mut buf), Ok(10));
+
+        assert_eq!(&buf[..], b"\x10\x01\xeatesting");
+    }
+
+    #[test]
+    fn encode_normal_data_with_flags() {
+        let data = X25Data {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            send_seq: 5,
+            recv_seq: 7,
+            qualifier: true,
+            delivery: true,
+            more: true,
+            user_data: Bytes::from_static(b"testing"),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(data.encode(&mut buf), Ok(10));
+
+        assert_eq!(&buf[..], b"\xd0\x01\xfatesting");
+    }
+
+    #[test]
+    fn encode_extended_data() {
+        let data = X25Data {
+            modulo: X25Modulo::Extended,
+            channel: 1,
+            send_seq: 65,
+            recv_seq: 99,
+            qualifier: false,
+            delivery: false,
+            more: false,
+            user_data: Bytes::from_static(b"testing"),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(data.encode(&mut buf), Ok(11));
+
+        assert_eq!(&buf[..], b"\x20\x01\x82\xc6testing");
+    }
+
+    #[test]
+    fn encode_extended_data_with_flags() {
+        let data = X25Data {
+            modulo: X25Modulo::Extended,
+            channel: 1,
+            send_seq: 65,
+            recv_seq: 99,
+            qualifier: true,
+            delivery: true,
+            more: true,
+            user_data: Bytes::from_static(b"testing"),
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(data.encode(&mut buf), Ok(11));
+
+        assert_eq!(&buf[..], b"\xe0\x01\x82\xc7testing");
+    }
+
+    #[test]
+    fn decode_normal_data() {
+        let buf = Bytes::from_static(b"\x10\x01\xeatesting");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::Data);
+
+        let X25Packet::Data(data) = packet else { unreachable!() };
+
+        assert_eq!(data.modulo, X25Modulo::Normal);
+        assert_eq!(data.channel, 1);
+        assert_eq!(data.send_seq, 5);
+        assert_eq!(data.recv_seq, 7);
+        assert!(!data.qualifier);
+        assert!(!data.delivery);
+        assert!(!data.more);
+        assert_eq!(&data.user_data[..], b"testing");
+    }
+
+    #[test]
+    fn decode_normal_data_with_flags() {
+        let buf = Bytes::from_static(b"\xd0\x01\xfatesting");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::Data);
+
+        let X25Packet::Data(data) = packet else { unreachable!() };
+
+        assert_eq!(data.modulo, X25Modulo::Normal);
+        assert_eq!(data.channel, 1);
+        assert_eq!(data.send_seq, 5);
+        assert_eq!(data.recv_seq, 7);
+        assert!(data.qualifier);
+        assert!(data.delivery);
+        assert!(data.more);
+        assert_eq!(&data.user_data[..], b"testing");
+    }
+
+    #[test]
+    fn decode_extended_data() {
+        let buf = Bytes::from_static(b"\x20\x01\x82\xc6testing");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::Data);
+
+        let X25Packet::Data(data) = packet else { unreachable!() };
+
+        assert_eq!(data.modulo, X25Modulo::Extended);
+        assert_eq!(data.channel, 1);
+        assert_eq!(data.send_seq, 65);
+        assert_eq!(data.recv_seq, 99);
+        assert!(!data.qualifier);
+        assert!(!data.delivery);
+        assert!(!data.more);
+        assert_eq!(&data.user_data[..], b"testing");
+    }
+
+    #[test]
+    fn decode_extended_data_with_flags() {
+        let buf = Bytes::from_static(b"\xe0\x01\x82\xc7testing");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::Data);
+
+        let X25Packet::Data(data) = packet else { unreachable!() };
+
+        assert_eq!(data.modulo, X25Modulo::Extended);
+        assert_eq!(data.channel, 1);
+        assert_eq!(data.send_seq, 65);
+        assert_eq!(data.recv_seq, 99);
+        assert!(data.qualifier);
+        assert!(data.delivery);
+        assert!(data.more);
+        assert_eq!(&data.user_data[..], b"testing");
     }
 }

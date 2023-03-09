@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use xotpad::x121::X121Addr;
 use xotpad::x25::{
-    X25CallAccept, X25CallRequest, X25ClearRequest, X25Modulo, X25Packet, X25PacketType,
+    X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Modulo, X25Packet,
 };
 use xotpad::xot::{self, XotLink};
 
@@ -65,6 +65,18 @@ fn clear_request(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Resu
     send(link, &clear_request.into())
 }
 
+fn clear_confirm(link: &mut XotLink) -> io::Result<()> {
+    let clear_confirm = X25ClearConfirm {
+        modulo: X25Modulo::Normal,
+        channel: 1,
+        called_addr: X121Addr::null(),
+        calling_addr: X121Addr::null(),
+        facilities: Vec::new(),
+    };
+
+    send(link, &clear_confirm.into())
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
@@ -109,8 +121,15 @@ fn main() -> io::Result<()> {
                             clear_request(&mut xot_link, 0, 0)?;
                         }
                     }
+                    X25Packet::ClearRequest(_) => {
+                        clear_confirm(&mut xot_link)?;
+                        break;
+                    }
                     X25Packet::ClearConfirm(_) => break,
-                    _ => todo!(),
+                    X25Packet::Data(_) => {
+                        // ...
+                    }
+                    _ => unimplemented!(),
                 }
             }
 

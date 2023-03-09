@@ -78,11 +78,11 @@ fn encode(x25_packet: &[u8], buf: &mut BytesMut) -> Result<usize, String> {
     let len = x25_packet.len();
 
     if len < x25::MIN_PACKET_LEN {
-        return Err("packet too small".into());
+        return Err("packet too short".into());
     }
 
     if len > x25::MAX_PACKET_LEN {
-        return Err("packet too big".into());
+        return Err("packet too long".into());
     }
 
     buf.reserve(XOT_HEADER_LEN + len);
@@ -116,11 +116,11 @@ fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
     let len = u16::from_be_bytes(len) as usize;
 
     if len < x25::MIN_PACKET_LEN {
-        return Err("packet too small".into());
+        return Err("packet too short".into());
     }
 
     if len > x25::MAX_PACKET_LEN {
-        return Err("packet too big".into());
+        return Err("packet too long".into());
     }
 
     if buf.len() < XOT_HEADER_LEN + len {

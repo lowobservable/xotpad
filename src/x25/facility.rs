@@ -221,7 +221,7 @@ fn encode_class_a_params(params: &(u8,), buf: &mut BytesMut) -> usize {
 
 fn decode_class_a_params(buf: &mut Bytes) -> Result<(u8,), String> {
     if buf.is_empty() {
-        return Err("facility too small".into());
+        return Err("facility too short".into());
     }
 
     Ok((buf.get_u8(),))
@@ -236,7 +236,7 @@ fn encode_class_b_params(params: &(u8, u8), buf: &mut BytesMut) -> usize {
 
 fn decode_class_b_params(buf: &mut Bytes) -> Result<(u8, u8), String> {
     if buf.len() < 2 {
-        return Err("facility too small".into());
+        return Err("facility too short".into());
     }
 
     Ok((buf.get_u8(), buf.get_u8()))
@@ -252,7 +252,7 @@ fn encode_class_c_params(params: &(u8, u8, u8), buf: &mut BytesMut) -> usize {
 
 fn decode_class_c_params(buf: &mut Bytes) -> Result<(u8, u8, u8), String> {
     if buf.len() < 3 {
-        return Err("facility too small".into());
+        return Err("facility too short".into());
     }
 
     Ok((buf.get_u8(), buf.get_u8(), buf.get_u8()))
@@ -275,13 +275,13 @@ fn encode_class_d_params(params: &Bytes, buf: &mut BytesMut) -> Result<usize, St
 
 fn decode_class_d_params(buf: &mut Bytes) -> Result<Bytes, String> {
     if buf.is_empty() {
-        return Err("facility too small".into());
+        return Err("facility too short".into());
     }
 
     let len = buf.get_u8() as usize;
 
     if buf.len() < len {
-        return Err("facility too small".into());
+        return Err("facility too short".into());
     }
 
     Ok(buf.copy_to_bytes(len))
