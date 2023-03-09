@@ -119,6 +119,8 @@ fn main() -> io::Result<()> {
         for tcp_stream in tcp_listener.incoming() {
             let mut xot_link = XotLink::new(tcp_stream.unwrap());
 
+            let mut send_seq = 0;
+
             loop {
                 let x25_packet = xot_link.recv()?;
 
@@ -142,12 +144,13 @@ fn main() -> io::Result<()> {
                     }
                     X25Packet::ClearConfirm(_) => break,
                     X25Packet::Data(data) => {
-                        let send_seq = 0;
                         let recv_seq = next_seq(data.send_seq, data.modulo);
 
                         let user_data = generate_response(data.user_data);
 
                         send_data(&mut xot_link, send_seq, recv_seq, user_data)?;
+
+                        send_seq = next_seq(send_seq, data.modulo);
                     }
                     _ => unimplemented!(),
                 }
