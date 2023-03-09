@@ -3,11 +3,13 @@ use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
+use std::thread;
+use std::time::Duration;
 
 use xotpad::x121::X121Addr;
 use xotpad::x25::{
     X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Modulo, X25Packet,
-    X25ResetConfirm, X25ResetRequest,
+    X25ReceiveNotReady, X25ReceiveReady, X25ResetConfirm, X25ResetRequest,
 };
 use xotpad::xot::{self, XotLink};
 
@@ -93,6 +95,26 @@ fn send_data(link: &mut XotLink, send_seq: u8, recv_seq: u8, user_data: Bytes) -
     send(link, &data.into())
 }
 
+fn send_receive_ready(link: &mut XotLink, recv_seq: u8) -> io::Result<()> {
+    let receive_ready = X25ReceiveReady {
+        modulo: X25Modulo::Normal,
+        channel: 1,
+        recv_seq,
+    };
+
+    send(link, &receive_ready.into())
+}
+
+fn send_receive_not_ready(link: &mut XotLink, recv_seq: u8) -> io::Result<()> {
+    let receive_not_ready = X25ReceiveNotReady {
+        modulo: X25Modulo::Normal,
+        channel: 1,
+        recv_seq,
+    };
+
+    send(link, &receive_not_ready.into())
+}
+
 fn send_reset_request(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Result<()> {
     let reset_request = X25ResetRequest {
         modulo: X25Modulo::Normal,
@@ -174,11 +196,26 @@ fn main() -> io::Result<()> {
 
                         recv_seq = next_seq(recv_seq, data.modulo);
 
-                        let user_data = generate_response(data.user_data);
+                        match &data.user_data[..] {
+                            b"xrr\r" => {
+                                send_receive_ready(&mut xot_link, recv_seq)?;
+                            }
+                            b"xrnr\r" => {
+                                send_receive_not_ready(&mut xot_link, recv_seq)?;
 
-                        send_data(&mut xot_link, send_seq, recv_seq, user_data)?;
+                                println!("sleeping for 10 seconds...");
+                                thread::sleep(Duration::from_secs(10));
 
-                        send_seq = next_seq(send_seq, data.modulo);
+                                send_receive_ready(&mut xot_link, recv_seq)?;
+                            }
+                            _ => {
+                                let user_data = generate_response(data.user_data);
+
+                                send_data(&mut xot_link, send_seq, recv_seq, user_data)?;
+
+                                send_seq = next_seq(send_seq, data.modulo);
+                            }
+                        };
                     }
                     X25Packet::ReceiveReady(_) => continue,
                     X25Packet::ResetRequest(_) => {

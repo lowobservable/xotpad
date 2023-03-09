@@ -30,7 +30,7 @@ pub enum X25Packet {
     // TODO: Interrupt
     // TODO: InterruptConfirm
     ReceiveReady(X25ReceiveReady),
-    // TODO: ReceiveNotReady
+    ReceiveNotReady(X25ReceiveNotReady),
     // TODO: Reject
     ResetRequest(X25ResetRequest),
     ResetConfirm(X25ResetConfirm),
@@ -50,7 +50,7 @@ pub enum X25PacketType {
     // TODO: Interrupt
     // TODO: InterruptConfirm
     ReceiveReady,
-    // TODO: ReceiveNotReady
+    ReceiveNotReady,
     // TODO: Reject
     ResetRequest,
     ResetConfirm,
@@ -85,6 +85,7 @@ impl X25Packet {
             X25Packet::ClearConfirm(_) => X25PacketType::ClearConfirm,
             X25Packet::Data(_) => X25PacketType::Data,
             X25Packet::ReceiveReady(_) => X25PacketType::ReceiveReady,
+            X25Packet::ReceiveNotReady(_) => X25PacketType::ReceiveNotReady,
             X25Packet::ResetRequest(_) => X25PacketType::ResetRequest,
             X25Packet::ResetConfirm(_) => X25PacketType::ResetConfirm,
         }
@@ -99,6 +100,7 @@ impl X25Packet {
             X25Packet::ClearConfirm(clear_confirm) => clear_confirm.modulo,
             X25Packet::Data(data) => data.modulo,
             X25Packet::ReceiveReady(receive_ready) => receive_ready.modulo,
+            X25Packet::ReceiveNotReady(receive_not_ready) => receive_not_ready.modulo,
             X25Packet::ResetRequest(reset_request) => reset_request.modulo,
             X25Packet::ResetConfirm(reset_confirm) => reset_confirm.modulo,
         }
@@ -113,6 +115,7 @@ impl X25Packet {
             X25Packet::ClearConfirm(clear_confirm) => clear_confirm.encode(buf),
             X25Packet::Data(data) => data.encode(buf),
             X25Packet::ReceiveReady(receive_ready) => receive_ready.encode(buf),
+            X25Packet::ReceiveNotReady(receive_not_ready) => receive_not_ready.encode(buf),
             X25Packet::ResetRequest(reset_request) => reset_request.encode(buf),
             X25Packet::ResetConfirm(reset_confirm) => reset_confirm.encode(buf),
         }
@@ -154,6 +157,10 @@ impl X25Packet {
             let receive_ready = X25ReceiveReady::decode(buf, modulo, gfi, channel, type_)?;
 
             Ok(X25Packet::ReceiveReady(receive_ready))
+        } else if type_ & 0x1f == 0x05 {
+            let receive_not_ready = X25ReceiveNotReady::decode(buf, modulo, gfi, channel, type_)?;
+
+            Ok(X25Packet::ReceiveNotReady(receive_not_ready))
         } else if type_ == 0x1b {
             let reset_request = X25ResetRequest::decode(buf, modulo, gfi, channel, type_)?;
 
@@ -755,7 +762,7 @@ impl X25ReceiveReady {
             return Err("invalid general format identifier".into());
         }
 
-        if modulo == X25Modulo::Extended && ((type_ & 0xfe) != 0x00 || (buf[3] & 0x01) != 0x00) {
+        if modulo == X25Modulo::Extended && (type_ != 0x01 || (buf[3] & 0x01) != 0x00) {
             return Err("unidentifiable packet".into());
         }
 
@@ -775,6 +782,101 @@ impl X25ReceiveReady {
 impl From<X25ReceiveReady> for X25Packet {
     fn from(receive_ready: X25ReceiveReady) -> X25Packet {
         X25Packet::ReceiveReady(receive_ready)
+    }
+}
+
+/// X.25 _receive not ready_ packet.
+#[derive(Debug)]
+pub struct X25ReceiveNotReady {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub recv_seq: u8,
+}
+
+impl X25ReceiveNotReady {
+    /// Encodes this `X25ReceiveNotReady` into the buffer provided.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        match self.modulo {
+            X25Modulo::Normal => self.encode_normal(buf),
+            X25Modulo::Extended => self.encode_extended(buf),
+        }
+    }
+
+    fn encode_normal(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        if self.recv_seq > 7 {
+            return Err("receive sequence out of range".into());
+        }
+
+        let mut len = 0;
+
+        let type_ = self.recv_seq << 5 | 0x05;
+
+        len += encode_packet_header(self.modulo, 0, self.channel, type_, buf)?;
+
+        Ok(len)
+    }
+
+    fn encode_extended(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        if self.recv_seq > 127 {
+            return Err("receive sequence out of range".into());
+        }
+
+        let mut len = 0;
+
+        len += encode_packet_header(self.modulo, 0, self.channel, 0x05, buf)?;
+
+        buf.put_u8(self.recv_seq << 1);
+        len += 1;
+
+        Ok(len)
+    }
+
+    fn decode(
+        buf: Bytes,
+        modulo: X25Modulo,
+        gfi: u8,
+        channel: u16,
+        type_: u8,
+    ) -> Result<Self, String> {
+        assert_eq!(type_ & 0x1f, 0x05);
+
+        let expected_len = match modulo {
+            X25Modulo::Normal => 3,
+            X25Modulo::Extended => 4,
+        };
+
+        if buf.len() < expected_len {
+            return Err("packet too short".into());
+        }
+
+        if buf.len() > expected_len {
+            return Err("packet too long".into());
+        }
+
+        if (gfi & 0x0c) != 0x00 {
+            return Err("invalid general format identifier".into());
+        }
+
+        if modulo == X25Modulo::Extended && (type_ != 0x05 || (buf[3] & 0x01) != 0x00) {
+            return Err("unidentifiable packet".into());
+        }
+
+        let recv_seq = match modulo {
+            X25Modulo::Normal => (buf[2] & 0xe0) >> 5,
+            X25Modulo::Extended => (buf[3] & 0xfe) >> 1,
+        };
+
+        Ok(X25ReceiveNotReady {
+            modulo,
+            channel,
+            recv_seq,
+        })
+    }
+}
+
+impl From<X25ReceiveNotReady> for X25Packet {
+    fn from(receive_not_ready: X25ReceiveNotReady) -> X25Packet {
+        X25Packet::ReceiveNotReady(receive_not_ready)
     }
 }
 
@@ -2023,6 +2125,75 @@ mod tests {
         assert_eq!(receive_ready.modulo, X25Modulo::Extended);
         assert_eq!(receive_ready.channel, 1);
         assert_eq!(receive_ready.recv_seq, 99);
+    }
+
+    #[test]
+    fn encode_normal_receive_not_ready() {
+        let receive_not_ready = X25ReceiveNotReady {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            recv_seq: 7,
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(receive_not_ready.encode(&mut buf), Ok(3));
+
+        assert_eq!(&buf[..], b"\x10\x01\xe5");
+    }
+
+    #[test]
+    fn encode_extended_receive_not_ready() {
+        let receive_not_ready = X25ReceiveNotReady {
+            modulo: X25Modulo::Extended,
+            channel: 1,
+            recv_seq: 99,
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(receive_not_ready.encode(&mut buf), Ok(4));
+
+        assert_eq!(&buf[..], b"\x20\x01\x05\xc6");
+    }
+
+    #[test]
+    fn decode_normal_receive_not_ready() {
+        let buf = Bytes::from_static(b"\x10\x01\xe5");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::ReceiveNotReady);
+
+        let X25Packet::ReceiveNotReady(receive_not_ready) = packet else { unreachable!() };
+
+        assert_eq!(receive_not_ready.modulo, X25Modulo::Normal);
+        assert_eq!(receive_not_ready.channel, 1);
+        assert_eq!(receive_not_ready.recv_seq, 7);
+    }
+
+    #[test]
+    fn decode_extended_receive_not_ready() {
+        let buf = Bytes::from_static(b"\x20\x01\x05\xc6");
+
+        let packet = X25Packet::decode(buf);
+
+        dbg!(&packet);
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::ReceiveNotReady);
+
+        let X25Packet::ReceiveNotReady(receive_not_ready) = packet else { unreachable!() };
+
+        assert_eq!(receive_not_ready.modulo, X25Modulo::Extended);
+        assert_eq!(receive_not_ready.channel, 1);
+        assert_eq!(receive_not_ready.recv_seq, 99);
     }
 
     #[test]
