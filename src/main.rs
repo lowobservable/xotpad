@@ -141,6 +141,7 @@ fn main() -> io::Result<()> {
             let mut xot_link = XotLink::new(tcp_stream.unwrap());
 
             let mut send_seq = 0;
+            let mut recv_seq = 0;
 
             loop {
                 let x25_packet = xot_link.recv()?;
@@ -165,7 +166,13 @@ fn main() -> io::Result<()> {
                     }
                     X25Packet::ClearConfirm(_) => break,
                     X25Packet::Data(data) => {
-                        let recv_seq = next_seq(data.send_seq, data.modulo);
+                        if data.send_seq != recv_seq {
+                            // Local procedure error - invalid P(S)...
+                            send_reset_request(&mut xot_link, 5, 1)?;
+                            continue;
+                        }
+
+                        recv_seq = next_seq(recv_seq, data.modulo);
 
                         let user_data = generate_response(data.user_data);
 
@@ -176,11 +183,13 @@ fn main() -> io::Result<()> {
                     X25Packet::ReceiveReady(_) => continue,
                     X25Packet::ResetRequest(_) => {
                         send_seq = 0;
+                        recv_seq = 0;
 
                         send_reset_confirm(&mut xot_link)?;
                     }
                     X25Packet::ResetConfirm(_) => {
                         send_seq = 0;
+                        recv_seq = 0;
                     }
                     _ => unimplemented!(),
                 }
