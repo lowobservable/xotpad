@@ -169,7 +169,7 @@ fn main() -> io::Result<()> {
 
                         let user_data = generate_response(data.user_data);
 
-                        send_data(&mut xot_link, 0, recv_seq, user_data)?;
+                        send_data(&mut xot_link, send_seq, recv_seq, user_data)?;
 
                         send_seq = next_seq(send_seq, data.modulo);
                     }
