@@ -32,7 +32,7 @@ pub enum X25Packet {
     ReceiveReady(X25ReceiveReady),
     // TODO: ReceiveNotReady
     // TODO: Reject
-    // TODO: ResetRequest
+    ResetRequest(X25ResetRequest),
     // TODO: ResetConfirm
     // TODO: RestartRequest
     // TODO: RestartConfirm
@@ -52,7 +52,7 @@ pub enum X25PacketType {
     ReceiveReady,
     // TODO: ReceiveNotReady
     // TODO: Reject
-    // TODO: ResetRequest
+    ResetRequest,
     // TODO: ResetConfirm
     // TODO: RestartRequest
     // TODO: RestartConfirm
@@ -85,6 +85,7 @@ impl X25Packet {
             X25Packet::ClearConfirm(_) => X25PacketType::ClearConfirm,
             X25Packet::Data(_) => X25PacketType::Data,
             X25Packet::ReceiveReady(_) => X25PacketType::ReceiveReady,
+            X25Packet::ResetRequest(_) => X25PacketType::ResetRequest,
         }
     }
 
@@ -97,6 +98,7 @@ impl X25Packet {
             X25Packet::ClearConfirm(clear_confirm) => clear_confirm.modulo,
             X25Packet::Data(data) => data.modulo,
             X25Packet::ReceiveReady(receive_ready) => receive_ready.modulo,
+            X25Packet::ResetRequest(reset_request) => reset_request.modulo,
         }
     }
 
@@ -109,6 +111,7 @@ impl X25Packet {
             X25Packet::ClearConfirm(clear_confirm) => clear_confirm.encode(buf),
             X25Packet::Data(data) => data.encode(buf),
             X25Packet::ReceiveReady(receive_ready) => receive_ready.encode(buf),
+            X25Packet::ResetRequest(reset_request) => reset_request.encode(buf),
         }
     }
 
@@ -148,6 +151,10 @@ impl X25Packet {
             let receive_ready = X25ReceiveReady::decode(buf, modulo, gfi, channel, type_)?;
 
             Ok(X25Packet::ReceiveReady(receive_ready))
+        } else if type_ == 0x1b {
+            let reset_request = X25ResetRequest::decode(buf, modulo, gfi, channel, type_)?;
+
+            Ok(X25Packet::ResetRequest(reset_request))
         } else {
             Err("unsupported packet type".into())
         }
@@ -486,16 +493,16 @@ impl X25ClearConfirm {
     ) -> Result<Self, String> {
         assert_eq!(type_, 0x17);
 
-        if (gfi & 0x04) != 0x00 {
-            return Err("invalid general format identifier".into());
-        }
-
         if buf.len() < 3 {
             return Err("packet too short".into());
         }
 
         if buf.len() > 259 {
             return Err("packet too long".into());
+        }
+
+        if (gfi & 0x04) != 0x00 {
+            return Err("invalid general format identifier".into());
         }
 
         buf.advance(3);
@@ -761,6 +768,75 @@ impl X25ReceiveReady {
 impl From<X25ReceiveReady> for X25Packet {
     fn from(receive_ready: X25ReceiveReady) -> X25Packet {
         X25Packet::ReceiveReady(receive_ready)
+    }
+}
+
+/// X.25 _reset request_ packet.
+#[derive(Debug)]
+pub struct X25ResetRequest {
+    pub modulo: X25Modulo,
+    pub channel: u16,
+    pub cause: u8,
+    pub diagnostic_code: u8,
+}
+
+impl X25ResetRequest {
+    /// Encodes this `X25ResetRequest` into the buffer provided.
+    pub fn encode(&self, buf: &mut BytesMut) -> Result<usize, String> {
+        let mut len = 0;
+
+        len += encode_packet_header(self.modulo, 0, self.channel, 0x1b, buf)?;
+
+        buf.put_u8(self.cause);
+        len += 1;
+
+        if self.diagnostic_code > 0 {
+            buf.put_u8(self.diagnostic_code);
+            len += 1;
+        }
+
+        Ok(len)
+    }
+
+    fn decode(
+        mut buf: Bytes,
+        modulo: X25Modulo,
+        gfi: u8,
+        channel: u16,
+        type_: u8,
+    ) -> Result<Self, String> {
+        assert_eq!(type_, 0x1b);
+
+        if buf.len() < 4 {
+            return Err("packet too short".into());
+        }
+
+        if buf.len() > 5 {
+            return Err("packet too long".into());
+        }
+
+        if (gfi & 0x0c) != 0x00 {
+            return Err("invalid general format identifier".into());
+        }
+
+        buf.advance(3);
+
+        let cause = buf.get_u8();
+
+        let diagnostic_code = if buf.has_remaining() { buf.get_u8() } else { 0 };
+
+        Ok(X25ResetRequest {
+            modulo,
+            channel,
+            cause,
+            diagnostic_code,
+        })
+    }
+}
+
+impl From<X25ResetRequest> for X25Packet {
+    fn from(reset_request: X25ResetRequest) -> X25Packet {
+        X25Packet::ResetRequest(reset_request)
     }
 }
 
@@ -1897,5 +1973,77 @@ mod tests {
         assert_eq!(receive_ready.modulo, X25Modulo::Extended);
         assert_eq!(receive_ready.channel, 1);
         assert_eq!(receive_ready.recv_seq, 99);
+    }
+
+    #[test]
+    fn encode_reset_request() {
+        let reset_request = X25ResetRequest {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            cause: 5,
+            diagnostic_code: 0,
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(reset_request.encode(&mut buf), Ok(4));
+
+        assert_eq!(&buf[..], b"\x10\x01\x1b\x05");
+    }
+
+    #[test]
+    fn encode_reset_request_with_diagnostic_code() {
+        let reset_request = X25ResetRequest {
+            modulo: X25Modulo::Normal,
+            channel: 1,
+            cause: 5,
+            diagnostic_code: 1,
+        };
+
+        let mut buf = BytesMut::new();
+
+        assert_eq!(reset_request.encode(&mut buf), Ok(5));
+
+        assert_eq!(&buf[..], b"\x10\x01\x1b\x05\x01");
+    }
+
+    #[test]
+    fn decode_reset_request() {
+        let buf = Bytes::from_static(b"\x10\x01\x1b\x05");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::ResetRequest);
+
+        let X25Packet::ResetRequest(reset_request) = packet else { unreachable!() };
+
+        assert_eq!(reset_request.modulo, X25Modulo::Normal);
+        assert_eq!(reset_request.channel, 1);
+        assert_eq!(reset_request.cause, 5);
+        assert_eq!(reset_request.diagnostic_code, 0);
+    }
+
+    #[test]
+    fn decode_reset_request_with_diagnostic_code() {
+        let buf = Bytes::from_static(b"\x10\x01\x1b\x05\x01");
+
+        let packet = X25Packet::decode(buf);
+
+        assert!(packet.is_ok());
+
+        let packet = packet.unwrap();
+
+        assert_eq!(packet.packet_type(), X25PacketType::ResetRequest);
+
+        let X25Packet::ResetRequest(reset_request) = packet else { unreachable!() };
+
+        assert_eq!(reset_request.modulo, X25Modulo::Normal);
+        assert_eq!(reset_request.channel, 1);
+        assert_eq!(reset_request.cause, 5);
+        assert_eq!(reset_request.diagnostic_code, 1);
     }
 }

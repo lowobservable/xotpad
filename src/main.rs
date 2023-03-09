@@ -148,11 +148,16 @@ fn main() -> io::Result<()> {
 
                         let user_data = generate_response(data.user_data);
 
-                        send_data(&mut xot_link, send_seq, recv_seq, user_data)?;
+                        send_data(&mut xot_link, 0, recv_seq, user_data)?;
 
                         send_seq = next_seq(send_seq, data.modulo);
                     }
                     X25Packet::ReceiveReady(_) => continue,
+                    X25Packet::ResetRequest(_) => {
+                        send_seq = 0;
+
+                        todo!();
+                    }
                     _ => unimplemented!(),
                 }
             }

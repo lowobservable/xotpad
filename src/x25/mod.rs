@@ -10,5 +10,5 @@ pub mod packet;
 pub use self::facility::X25Facility;
 pub use self::packet::{
     X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Modulo, X25Packet,
-    X25PacketType, X25ReceiveReady, MAX_PACKET_LEN, MIN_PACKET_LEN,
+    X25PacketType, X25ReceiveReady, X25ResetRequest, MAX_PACKET_LEN, MIN_PACKET_LEN,
 };
