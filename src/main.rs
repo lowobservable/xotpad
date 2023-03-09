@@ -6,7 +6,7 @@ use std::str::FromStr;
 
 use xotpad::x121::X121Addr;
 use xotpad::x25::{
-    X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Modulo, X25Packet,
+    X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Modulo, X25Packet,
 };
 use xotpad::xot::{self, XotLink};
 
@@ -22,7 +22,7 @@ fn send(link: &mut XotLink, packet: &X25Packet) -> io::Result<()> {
     link.send(&buf)
 }
 
-fn call_request(link: &mut XotLink, addr: &X121Addr) -> io::Result<()> {
+fn send_call_request(link: &mut XotLink, addr: &X121Addr) -> io::Result<()> {
     let calling_addr = X121Addr::from_str("73720201").unwrap();
 
     let call_request = X25CallRequest {
@@ -37,7 +37,7 @@ fn call_request(link: &mut XotLink, addr: &X121Addr) -> io::Result<()> {
     send(link, &call_request.into())
 }
 
-fn call_accept(link: &mut XotLink) -> io::Result<()> {
+fn send_call_accept(link: &mut XotLink) -> io::Result<()> {
     let call_accept = X25CallAccept {
         modulo: X25Modulo::Normal,
         channel: 1,
@@ -50,7 +50,7 @@ fn call_accept(link: &mut XotLink) -> io::Result<()> {
     send(link, &call_accept.into())
 }
 
-fn clear_request(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Result<()> {
+fn send_clear_request(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Result<()> {
     let clear_request = X25ClearRequest {
         modulo: X25Modulo::Normal,
         channel: 1,
@@ -65,7 +65,7 @@ fn clear_request(link: &mut XotLink, cause: u8, diagnostic_code: u8) -> io::Resu
     send(link, &clear_request.into())
 }
 
-fn clear_confirm(link: &mut XotLink) -> io::Result<()> {
+fn send_clear_confirm(link: &mut XotLink) -> io::Result<()> {
     let clear_confirm = X25ClearConfirm {
         modulo: X25Modulo::Normal,
         channel: 1,
@@ -77,6 +77,21 @@ fn clear_confirm(link: &mut XotLink) -> io::Result<()> {
     send(link, &clear_confirm.into())
 }
 
+fn send_data(link: &mut XotLink, send_seq: u8, recv_seq: u8, user_data: Bytes) -> io::Result<()> {
+    let data = X25Data {
+        modulo: X25Modulo::Normal,
+        channel: 1,
+        send_seq,
+        recv_seq,
+        qualifier: false,
+        delivery: false,
+        more: false,
+        user_data,
+    };
+
+    send(link, &data.into())
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
@@ -85,7 +100,7 @@ fn main() -> io::Result<()> {
 
         let mut xot_link = XotLink::new(tcp_stream);
 
-        call_request(&mut xot_link, &X121Addr::from_str("73710301").unwrap())?;
+        send_call_request(&mut xot_link, &X121Addr::from_str("73710301").unwrap())?;
 
         loop {
             let x25_packet = xot_link.recv()?;
@@ -96,7 +111,7 @@ fn main() -> io::Result<()> {
 
             println!("{:?}", x25_packet);
 
-            clear_request(&mut xot_link, 0, 0)?;
+            send_clear_request(&mut xot_link, 0, 0)?;
         }
     } else if args[1] == "listen" {
         let tcp_listener = TcpListener::bind("0.0.0.0:1998")?;
@@ -116,18 +131,23 @@ fn main() -> io::Result<()> {
                 match x25_packet {
                     X25Packet::CallRequest(call_request) => {
                         if call_request.called_addr == X121Addr::from_str("73720299").unwrap() {
-                            call_accept(&mut xot_link)?;
+                            send_call_accept(&mut xot_link)?;
                         } else {
-                            clear_request(&mut xot_link, 0, 0)?;
+                            send_clear_request(&mut xot_link, 0, 0)?;
                         }
                     }
                     X25Packet::ClearRequest(_) => {
-                        clear_confirm(&mut xot_link)?;
+                        send_clear_confirm(&mut xot_link)?;
                         break;
                     }
                     X25Packet::ClearConfirm(_) => break,
-                    X25Packet::Data(_) => {
-                        // ...
+                    X25Packet::Data(data) => {
+                        let send_seq = 0;
+                        let recv_seq = next_seq(data.send_seq, data.modulo);
+
+                        let user_data = generate_response(data.user_data);
+
+                        send_data(&mut xot_link, send_seq, recv_seq, user_data)?;
                     }
                     _ => unimplemented!(),
                 }
@@ -138,6 +158,14 @@ fn main() -> io::Result<()> {
     }
 
     Ok(())
+}
+
+fn next_seq(seq: u8, modulo: X25Modulo) -> u8 {
+    (seq + 1) % (modulo as u8)
+}
+
+fn generate_response(user_data: Bytes) -> Bytes {
+    user_data
 }
 
 /*
