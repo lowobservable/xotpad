@@ -152,6 +152,7 @@ fn main() -> io::Result<()> {
 
                         send_seq = next_seq(send_seq, data.modulo);
                     }
+                    X25Packet::ReceiveReady(_) => continue,
                     _ => unimplemented!(),
                 }
             }
