@@ -14,7 +14,9 @@ pub struct X121Addr {
 impl X121Addr {
     /// Creates a new null `X121Addr`.
     pub fn null() -> Self {
-        X121Addr { addr: "".into() }
+        X121Addr {
+            addr: String::new(),
+        }
     }
 
     /// Creates a new `X121Addr` from digits.
@@ -27,7 +29,7 @@ impl X121Addr {
             return Err("digits must be between 0 and 9".into());
         }
 
-        let addr: String = digits.iter().map(|d| d.to_string()).collect();
+        let addr: String = digits.iter().map(ToString::to_string).collect();
 
         X121Addr::from_str(&addr)
     }
@@ -45,7 +47,9 @@ impl X121Addr {
 
     /// Returns an iterator over the digits.
     pub fn digits(&self) -> impl Iterator<Item = u8> + '_ {
-        self.addr.chars().map(|c| c.to_digit(10).unwrap() as u8)
+        self.addr
+            .chars()
+            .map(|c| u8::try_from(c.to_digit(10).unwrap()).unwrap())
     }
 }
 

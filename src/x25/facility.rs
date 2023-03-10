@@ -7,6 +7,7 @@
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::collections::HashSet;
+use std::convert::TryFrom;
 
 /// An X.25 facility.
 #[derive(PartialEq, Debug)]
@@ -38,10 +39,10 @@ impl X25Facility {
         match self {
             X25Facility::PacketSize { .. } => 0x42,
             X25Facility::WindowSize { .. } => 0x43,
-            X25Facility::ClassA(code, _) => *code,
-            X25Facility::ClassB(code, _) => *code,
-            X25Facility::ClassC(code, _) => *code,
-            X25Facility::ClassD(code, _) => *code,
+            X25Facility::ClassA(code, _)
+            | X25Facility::ClassB(code, _)
+            | X25Facility::ClassC(code, _)
+            | X25Facility::ClassD(code, _) => *code,
         }
     }
 }
@@ -72,7 +73,7 @@ pub fn encode_facilities(facilities: &[X25Facility], buf: &mut BytesMut) -> Resu
                 let from_called = encode_packet_size(*from_called)?;
                 let from_calling = encode_packet_size(*from_calling)?;
 
-                encode_class_b_params(&(from_called, from_calling), buf)
+                encode_class_b_params((from_called, from_calling), buf)
             }
 
             X25Facility::WindowSize {
@@ -89,37 +90,29 @@ pub fn encode_facilities(facilities: &[X25Facility], buf: &mut BytesMut) -> Resu
                     return Err("invalid window size".into());
                 }
 
-                encode_class_b_params(&(*from_called, *from_calling), buf)
+                encode_class_b_params((*from_called, *from_calling), buf)
             }
 
             X25Facility::ClassA(_, params) => {
-                if !is_class_a_code(code) {
-                    panic!("code class mismatch");
-                }
+                assert!(is_class_a_code(code));
 
-                encode_class_a_params(params, buf)
+                encode_class_a_params(*params, buf)
             }
 
             X25Facility::ClassB(_, params) => {
-                if !is_class_b_code(code) {
-                    panic!("code class mismatch");
-                }
+                assert!(is_class_b_code(code));
 
-                encode_class_b_params(params, buf)
+                encode_class_b_params(*params, buf)
             }
 
             X25Facility::ClassC(_, params) => {
-                if !is_class_c_code(code) {
-                    panic!("code class mismatch");
-                }
+                assert!(is_class_c_code(code));
 
-                encode_class_c_params(params, buf)
+                encode_class_c_params(*params, buf)
             }
 
             X25Facility::ClassD(_, params) => {
-                if !is_class_d_code(code) {
-                    panic!("code class mismatch");
-                }
+                assert!(is_class_d_code(code));
 
                 encode_class_d_params(params, buf)?
             }
@@ -213,7 +206,7 @@ fn is_class_d_code(code: u8) -> bool {
     (code & 0xc0) >> 6 == 3
 }
 
-fn encode_class_a_params(params: &(u8,), buf: &mut BytesMut) -> usize {
+fn encode_class_a_params(params: (u8,), buf: &mut BytesMut) -> usize {
     buf.put_u8(params.0);
 
     1
@@ -227,7 +220,7 @@ fn decode_class_a_params(buf: &mut Bytes) -> Result<(u8,), String> {
     Ok((buf.get_u8(),))
 }
 
-fn encode_class_b_params(params: &(u8, u8), buf: &mut BytesMut) -> usize {
+fn encode_class_b_params(params: (u8, u8), buf: &mut BytesMut) -> usize {
     buf.put_u8(params.0);
     buf.put_u8(params.1);
 
@@ -242,7 +235,7 @@ fn decode_class_b_params(buf: &mut Bytes) -> Result<(u8, u8), String> {
     Ok((buf.get_u8(), buf.get_u8()))
 }
 
-fn encode_class_c_params(params: &(u8, u8, u8), buf: &mut BytesMut) -> usize {
+fn encode_class_c_params(params: (u8, u8, u8), buf: &mut BytesMut) -> usize {
     buf.put_u8(params.0);
     buf.put_u8(params.1);
     buf.put_u8(params.2);
@@ -267,7 +260,7 @@ fn encode_class_d_params(params: &Bytes, buf: &mut BytesMut) -> Result<usize, St
 
     buf.reserve(len);
 
-    buf.put_u8(params.len() as u8);
+    buf.put_u8(u8::try_from(params.len()).unwrap());
     buf.put_slice(params);
 
     Ok(len)
@@ -308,7 +301,7 @@ fn decode_packet_size(size: u8) -> Result<usize, String> {
         return Err("invalid packet size".into());
     }
 
-    Ok(usize::pow(2, size as u32))
+    Ok(usize::pow(2, u32::from(size)))
 }
 
 #[cfg(test)]

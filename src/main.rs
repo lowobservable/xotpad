@@ -148,11 +148,11 @@ fn main() -> io::Result<()> {
         loop {
             let x25_packet = xot_link.recv()?;
 
-            println!("{:?}", x25_packet);
+            dbg!(&x25_packet);
 
             let x25_packet = X25Packet::decode(x25_packet).map_err(to_other_io_error)?;
 
-            println!("{:?}", x25_packet);
+            dbg!(&x25_packet);
 
             send_clear_request(&mut xot_link, 0, 0)?;
         }
@@ -168,11 +168,11 @@ fn main() -> io::Result<()> {
             loop {
                 let x25_packet = xot_link.recv()?;
 
-                println!("{:?}", x25_packet);
+                dbg!(&x25_packet);
 
                 let x25_packet = X25Packet::decode(x25_packet).map_err(to_other_io_error)?;
 
-                println!("{:?}", x25_packet);
+                dbg!(&x25_packet);
 
                 match x25_packet {
                     X25Packet::CallRequest(call_request) => {

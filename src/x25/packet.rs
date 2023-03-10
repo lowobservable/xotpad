@@ -582,8 +582,8 @@ impl X25Data {
 
         let mut len = 0;
 
-        let gfi_overlay = (self.qualifier as u8) << 3 | (self.delivery as u8) << 2;
-        let type_ = self.recv_seq << 5 | (self.more as u8) << 4 | self.send_seq << 1;
+        let gfi_overlay = u8::from(self.qualifier) << 3 | u8::from(self.delivery) << 2;
+        let type_ = self.recv_seq << 5 | u8::from(self.more) << 4 | self.send_seq << 1;
 
         len += encode_packet_header(self.modulo, gfi_overlay, self.channel, type_, buf)?;
 
@@ -604,12 +604,12 @@ impl X25Data {
 
         let mut len = 0;
 
-        let gfi_overlay = (self.qualifier as u8) << 3 | (self.delivery as u8) << 2;
+        let gfi_overlay = u8::from(self.qualifier) << 3 | u8::from(self.delivery) << 2;
         let type_ = self.send_seq << 1;
 
         len += encode_packet_header(self.modulo, gfi_overlay, self.channel, type_, buf)?;
 
-        buf.put_u8(self.recv_seq << 1 | self.more as u8);
+        buf.put_u8(self.recv_seq << 1 | u8::from(self.more));
         len += 1;
 
         buf.put_slice(&self.user_data);
@@ -736,6 +736,7 @@ impl X25ReceiveReady {
         Ok(len)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn decode(
         buf: Bytes,
         modulo: X25Modulo,
@@ -831,6 +832,7 @@ impl X25ReceiveNotReady {
         Ok(len)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn decode(
         buf: Bytes,
         modulo: X25Modulo,
@@ -962,6 +964,7 @@ impl X25ResetConfirm {
         encode_packet_header(self.modulo, 0, self.channel, 0x1f, buf)
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn decode(
         buf: Bytes,
         modulo: X25Modulo,
@@ -1021,7 +1024,7 @@ fn decode_packet_header(buf: &Bytes) -> Result<(X25Modulo, u8, u16, u8), String>
     }
 
     let gfi = (buf[0] & 0xf0) >> 4;
-    let channel = ((buf[0] as u16 & 0x0f) << 8) | buf[1] as u16;
+    let channel = ((u16::from(buf[0]) & 0x0f) << 8) | u16::from(buf[1]);
     let type_ = buf[2];
 
     let modulo = match gfi & 0x03 {
@@ -1034,7 +1037,7 @@ fn decode_packet_header(buf: &Bytes) -> Result<(X25Modulo, u8, u16, u8), String>
 }
 
 fn encode_addr_block(called: &X121Addr, calling: &X121Addr, buf: &mut BytesMut) -> usize {
-    buf.put_u8(((calling.len() as u8) << 4) | (called.len() as u8));
+    buf.put_u8(u8::try_from(calling.len()).unwrap() << 4 | u8::try_from(called.len()).unwrap());
 
     let mut len = 1;
 
@@ -1099,7 +1102,7 @@ fn encode_facilities_block(
         return Err("facilities too long".into());
     }
 
-    buf.put_u8(len as u8);
+    buf.put_u8(u8::try_from(len).unwrap());
     buf.put(facilities_buf);
 
     Ok(1 + len)

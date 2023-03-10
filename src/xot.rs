@@ -88,7 +88,7 @@ fn encode(x25_packet: &[u8], buf: &mut BytesMut) -> Result<usize, String> {
     buf.reserve(XOT_HEADER_LEN + len);
 
     buf.put_u16(version);
-    buf.put_u16(len as u16);
+    buf.put_u16(u16::try_from(len).unwrap());
     buf.put_slice(x25_packet);
 
     Ok(XOT_HEADER_LEN + len)
