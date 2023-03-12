@@ -1,11 +1,9 @@
 use bytes::{Bytes, BytesMut};
 use std::collections::VecDeque;
-use std::env;
 use std::io;
-use std::net::{TcpListener, TcpStream};
-use std::ops::Deref;
+use std::net::TcpStream;
 use std::str::FromStr;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::Duration;
 
@@ -19,6 +17,7 @@ use xotpad::xot::{self, XotLink};
 struct X25Params {
     addr: X121Addr,
     modulo: X25Modulo,
+    // ...
     t21: Duration,
     t23: Duration,
 }
@@ -35,6 +34,17 @@ impl From<&X25Params> for Vec<X25Facility> {
                 from_calling: 2, // TODO
             },
         ]
+    }
+}
+
+// TODO: can we make this consume the inncombin params?
+fn negotiate(call_accept: &X25CallAccept, params: &X25Params) -> X25Params {
+    let params = params.clone();
+
+    X25Params {
+        addr: params.addr.clone(),
+        modulo: call_accept.modulo,
+        ..params
     }
 }
 
@@ -73,11 +83,11 @@ enum SvcState {
 
 struct Svc {
     send_link: Arc<Mutex<XotLink>>, // does this really need to have a lock?
-    params: X25Params,
     channel: u16,
+    // TODO: if call / listen handled the bootstrapping better, this would
+    // not need a lock, right?
+    params: Arc<RwLock<X25Params>>,
     state: Arc<(Mutex<SvcState>, Condvar)>,
-    modulo: X25Modulo, // TODO: this is "real" modulo...
-    // ...
     send_queue: Arc<(Mutex<VecDeque<(Bytes, bool)>>, Condvar)>,
     recv_queue: Arc<(Mutex<VecDeque<X25Data>>, Condvar)>,
 }
@@ -85,12 +95,12 @@ struct Svc {
 impl Svc {
     pub fn call(
         link: XotLink,
-        params: &X25Params,
         channel: u16,
         addr: &X121Addr,
         call_user_data: &Bytes,
+        params: &X25Params,
     ) -> io::Result<Self> {
-        let mut svc = Svc::start(link, params.clone(), channel);
+        let mut svc = Svc::start(link, channel, params);
 
         svc.call_request(addr, call_user_data)?;
 
@@ -113,8 +123,10 @@ impl Svc {
 
             *state = SvcState::WaitClearConfirm;
 
+            let modulo = self.params.read().unwrap().modulo;
+
             let clear_request = X25ClearRequest {
-                modulo: self.modulo,
+                modulo,
                 channel: self.channel,
                 cause,
                 diagnostic_code,
@@ -132,8 +144,10 @@ impl Svc {
         }
 
         // Okay, now we wait...
+        let timeout = self.params.read().unwrap().t23;
+
         let (state, _) = condvar
-            .wait_timeout_while(state.lock().unwrap(), self.params.t23, |state| {
+            .wait_timeout_while(state.lock().unwrap(), timeout, |state| {
                 *state == SvcState::WaitClearConfirm
             })
             .unwrap();
@@ -145,17 +159,19 @@ impl Svc {
         }
     }
 
-    fn start(link: XotLink, params: X25Params, channel: u16) -> Self {
+    fn start(link: XotLink, channel: u16, params: &X25Params) -> Self {
         let (send_link, mut recv_link) = split_xot_link(link);
 
         let send_link = Arc::new(Mutex::new(send_link));
-        let state = Arc::new((Mutex::new(SvcState::Ready), Condvar::new()));
 
+        let params = Arc::new(RwLock::new(params.clone()));
+        let state = Arc::new((Mutex::new(SvcState::Ready), Condvar::new()));
         let send_queue = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
         let recv_queue = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
 
         // start the packet receiver thread...
         thread::spawn({
+            let params = Arc::clone(&params);
             let state = Arc::clone(&state);
             let recv_queue = Arc::clone(&recv_queue);
 
@@ -184,8 +200,10 @@ impl Svc {
                         }
                         SvcState::WaitCallAccept => {
                             match packet {
-                                X25Packet::CallAccept(_) => {
-                                    // TODO: we need to negotiate!
+                                X25Packet::CallAccept(call_accept) => {
+                                    let mut params = params.write().unwrap();
+
+                                    *params = negotiate(&call_accept, &params);
                                     *state = SvcState::DataTransfer;
                                 }
                                 X25Packet::ClearRequest(clear_request) => {
@@ -244,15 +262,11 @@ impl Svc {
             }
         });
 
-        let modulo = params.modulo; // ???
-
         Svc {
             send_link,
-            params,
             channel,
+            params,
             state,
-            modulo,
-            // ...
             send_queue,
             recv_queue,
         }
@@ -271,11 +285,13 @@ impl Svc {
 
             *state = SvcState::WaitCallAccept;
 
+            let params = self.params.read().unwrap();
+
             let call_request = X25CallRequest {
-                modulo: self.params.modulo,
+                modulo: params.modulo,
                 channel: self.channel,
                 called_addr: addr.clone(),
-                calling_addr: self.params.addr.clone(),
+                calling_addr: params.addr.clone(),
                 facilities: Vec::new(),
                 call_user_data: call_user_data.clone(),
             };
@@ -288,8 +304,10 @@ impl Svc {
         }
 
         // Okay, now we wait...
+        let timeout = self.params.read().unwrap().t21;
+
         let (state, _) = condvar
-            .wait_timeout_while(state.lock().unwrap(), self.params.t21, |state| {
+            .wait_timeout_while(state.lock().unwrap(), timeout, |state| {
                 *state == SvcState::WaitCallAccept
             })
             .unwrap();
@@ -387,7 +405,7 @@ fn main() -> io::Result<()> {
     let addr = X121Addr::from_str("737101").unwrap();
     let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
-    let svc = Svc::call(xot_link, &x25_params, 1, &addr, &call_user_data)?;
+    let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &x25_params)?;
 
     println!("COM!!!");
 
