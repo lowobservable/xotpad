@@ -78,7 +78,8 @@ struct Svc {
     state: Arc<(Mutex<SvcState>, Condvar)>,
     modulo: X25Modulo, // TODO: this is "real" modulo...
     // ...
-    recv_data: Arc<(Mutex<VecDeque<X25Data>>, Condvar)>,
+    send_queue: Arc<(Mutex<VecDeque<(Bytes, bool)>>, Condvar)>,
+    recv_queue: Arc<(Mutex<VecDeque<X25Data>>, Condvar)>,
 }
 
 impl Svc {
@@ -150,12 +151,13 @@ impl Svc {
         let send_link = Arc::new(Mutex::new(send_link));
         let state = Arc::new((Mutex::new(SvcState::Ready), Condvar::new()));
 
-        let recv_data = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
+        let send_queue = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
+        let recv_queue = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
 
         // start the packet receiver thread...
         thread::spawn({
             let state = Arc::clone(&state);
-            let recv_data = Arc::clone(&recv_data);
+            let recv_queue = Arc::clone(&recv_queue);
 
             move || {
                 println!("recv thread starting...");
@@ -205,7 +207,7 @@ impl Svc {
                                 // validate it...
 
                                 // queue it...
-                                Svc::queue_recv_data(&recv_data, data);
+                                Svc::queue_recv_data(&recv_queue, data);
 
                                 // update window...
 
@@ -251,7 +253,8 @@ impl Svc {
             state,
             modulo,
             // ...
-            recv_data,
+            send_queue,
+            recv_queue,
         }
     }
 
@@ -322,13 +325,26 @@ impl Svc {
 
 impl Vc for Svc {
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
-        todo!()
+        // TODO: check that things aren't dead... maybe?
+
+        let (queue, condvar) = &*self.send_queue;
+
+        let mut queue = queue.lock().unwrap();
+
+        // TODO: split user_data into chunks based on max send packet size...
+        queue.push_back((user_data, qualifier));
+
+        condvar.notify_all();
+
+        Ok(())
     }
 
     fn recv(&self) -> io::Result<(Bytes, bool)> {
-        let (queue, condvar) = &*self.recv_data;
+        let (queue, condvar) = &*self.recv_queue;
 
         let mut queue = queue.lock().unwrap();
+
+        // TODO: this should "reconstruct" MORE packets...
 
         loop {
             // TODO...
@@ -381,9 +397,12 @@ fn main() -> io::Result<()> {
         dbg!(&data);
 
         if data.0.ends_with(b"Password: ") {
+            /*
             println!("y0!");
 
-            svc.send(Bytes::from_static(b"password"), false)?;
+            svc.send(Bytes::from_static(b"password\r"), false)?;
+            */
+            break;
         }
     }
 
