@@ -39,7 +39,7 @@ impl From<&X25Params> for Vec<X25Facility> {
 }
 
 trait Vc {
-    //fn send(&self, user_data: &Bytes, qualifier: bool) -> io::Result<()>;
+    fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()>;
 
     fn recv(&self) -> io::Result<(Bytes, bool)>;
 
@@ -176,7 +176,8 @@ impl Svc {
                     match *state {
                         SvcState::Ready => {
                             // uggghh, we only expect an incoming call I guess?
-                            // or reset... if this was a PVC
+                            // or reset... if this was a PVC - actually PVC
+                            // probably goes straight to DataTransfer?
                             unimplemented!("state == ready");
                         }
                         SvcState::WaitCallAccept => {
@@ -185,8 +186,9 @@ impl Svc {
                                     // TODO: we need to negotiate!
                                     *state = SvcState::DataTransfer;
                                 }
-                                X25Packet::ClearRequest(_) => {
+                                X25Packet::ClearRequest(clear_request) => {
                                     // TODO; how to communicate "last" cause?
+                                    dbg!(clear_request);
                                     *state = SvcState::Ready;
                                 }
                                 X25Packet::CallRequest(_) => {
@@ -319,6 +321,10 @@ impl Svc {
 }
 
 impl Vc for Svc {
+    fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
+        todo!()
+    }
+
     fn recv(&self) -> io::Result<(Bytes, bool)> {
         let (queue, condvar) = &*self.recv_data;
 
@@ -351,80 +357,39 @@ fn split_xot_link(link: XotLink) -> (XotLink, XotLink) {
 }
 
 fn main() -> io::Result<()> {
-    let args: Vec<String> = env::args().collect();
+    let x25_params = X25Params {
+        addr: X121Addr::from_str("73720201").unwrap(),
+        modulo: X25Modulo::Normal,
+        t21: Duration::from_secs(5),
+        t23: Duration::from_secs(5),
+    };
 
-    if args.len() > 1 && args[1] == "blah" {
-        let tcp_listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT))?;
+    let tcp_stream = TcpStream::connect(("pac1", xot::TCP_PORT))?;
 
-        for tcp_stream in tcp_listener.incoming() {
-            println!("got a live one...");
+    let xot_link = XotLink::new(tcp_stream);
 
-            let mut xot_link = XotLink::new(tcp_stream.unwrap());
+    let addr = X121Addr::from_str("737101").unwrap();
+    let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
-            thread::sleep(Duration::from_secs(2));
+    let svc = Svc::call(xot_link, &x25_params, 1, &addr, &call_user_data)?;
 
-            let x25_packet = X25CallAccept {
-                modulo: X25Modulo::Normal,
-                channel: 1,
-                called_addr: X121Addr::null(),
-                calling_addr: X121Addr::null(),
-                facilities: Vec::new(),
-                called_user_data: Bytes::new(),
-            };
+    println!("COM!!!");
 
-            /*
-            let x25_packet = X25ClearRequest {
-                modulo: X25Modulo::Normal,
-                channel: 1,
-                cause: 0,
-                diagnostic_code: 0,
-                called_addr: X121Addr::null(),
-                calling_addr: X121Addr::null(),
-                facilities: Vec::new(),
-                clear_user_data: Bytes::new(),
-            };
-            */
+    loop {
+        let data = svc.recv()?;
 
-            let mut buf = BytesMut::new();
+        dbg!(&data);
 
-            x25_packet.encode(&mut buf).map_err(to_other_io_error)?;
+        if data.0.ends_with(b"Password: ") {
+            println!("y0!");
 
-            xot_link.send(&buf)?;
-
-            println!("sent packet!");
-
-            // wait around a bit
-            thread::sleep(Duration::from_secs(20));
+            svc.send(Bytes::from_static(b"password"), false)?;
         }
-    } else {
-        let x25_params = X25Params {
-            addr: X121Addr::from_str("73720201").unwrap(),
-            modulo: X25Modulo::Normal,
-            t21: Duration::from_secs(5),
-            t23: Duration::from_secs(5),
-        };
-
-        let tcp_stream = TcpStream::connect(("pac1", xot::TCP_PORT))?;
-
-        let xot_link = XotLink::new(tcp_stream);
-
-        let addr = X121Addr::from_str("737101").unwrap();
-        let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
-
-        let svc = Svc::call(xot_link, &x25_params, 1, &addr, &call_user_data)?;
-
-        println!("COM!!!");
-
-        loop {
-            let data = svc.recv()?;
-
-            dbg!(data);
-        }
-
-        svc.clear(0, 0)?;
-
-        println!("all done!");
     }
+
+    svc.clear(0, 0)?;
+
+    println!("all done!");
 
     Ok(())
 }
