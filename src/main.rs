@@ -76,9 +76,26 @@ impl SvcIncomingCall {
 enum SvcState {
     Ready,
     WaitCallAccept,
-    DataTransfer,
+    DataTransfer(DataTransferState),
     //WaitResetConfirm,
     WaitClearConfirm,
+}
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+struct DataTransferState {
+    send_seq: u8,
+    recv_seq: u8,
+    // ...
+}
+
+impl Default for DataTransferState {
+    fn default() -> Self {
+        DataTransferState {
+            send_seq: 0,
+            recv_seq: 0,
+            // ...
+        }
+    }
 }
 
 struct Svc {
@@ -115,7 +132,8 @@ impl Svc {
         {
             let mut state = state.lock().unwrap();
 
-            if !(*state == SvcState::DataTransfer/*|| *state == SvcState::WaitResetConfirm)*/) {
+            if !(matches!(*state, SvcState::DataTransfer(_))/*|| *state == SvcState::WaitResetConfirm)*/)
+            {
                 return Err(to_other_io_error("invalid state".into()));
             }
 
@@ -204,7 +222,7 @@ impl Svc {
                                     let mut params = params.write().unwrap();
 
                                     *params = negotiate(&call_accept, &params);
-                                    *state = SvcState::DataTransfer;
+                                    *state = SvcState::DataTransfer(DataTransferState::default());
                                 }
                                 X25Packet::ClearRequest(clear_request) => {
                                     // TODO; how to communicate "last" cause?
@@ -220,14 +238,21 @@ impl Svc {
                                 }
                             }
                         }
-                        SvcState::DataTransfer => match packet {
+                        SvcState::DataTransfer(mut data_transfer_state) => match packet {
                             X25Packet::Data(data) => {
                                 // validate it...
+                                if data.send_seq != data_transfer_state.recv_seq {
+                                    todo!("invalid P(S)");
+                                }
 
                                 // queue it...
                                 Svc::queue_recv_data(&recv_queue, data);
 
                                 // update window...
+                                data_transfer_state.recv_seq = next_seq(
+                                    data_transfer_state.recv_seq,
+                                    params.read().unwrap().modulo,
+                                );
 
                                 // release anything from the send queue...
 
@@ -313,13 +338,25 @@ impl Svc {
             .unwrap();
 
         match *state {
-            SvcState::DataTransfer => Ok(()),
+            SvcState::DataTransfer(_) => Ok(()),
             SvcState::Ready => Err(to_other_io_error(
                 "rejected but I don't know how to tell you why just yet".into(),
             )),
             SvcState::WaitCallAccept => Err(to_other_io_error("T21 timeout".into())),
             _ => unreachable!(),
         }
+    }
+
+    fn send_queued_data() {
+        // TODO...
+    }
+
+    fn queue_recv_data((queue, condvar): &(Mutex<VecDeque<X25Data>>, Condvar), data: X25Data) {
+        let mut queue = queue.lock().unwrap();
+
+        queue.push_back(data);
+
+        condvar.notify_all();
     }
 
     fn send_packet(link: &Mutex<XotLink>, packet: &X25Packet) -> io::Result<()> {
@@ -330,14 +367,6 @@ impl Svc {
         let mut link = link.lock().unwrap();
 
         link.send(&buf)
-    }
-
-    fn queue_recv_data((queue, condvar): &(Mutex<VecDeque<X25Data>>, Condvar), data: X25Data) {
-        let mut queue = queue.lock().unwrap();
-
-        queue.push_back(data);
-
-        condvar.notify_all();
     }
 }
 
