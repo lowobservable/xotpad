@@ -72,7 +72,7 @@ impl SvcIncomingCall {
 }
 */
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum SvcState {
     Ready,
     WaitCallAccept,
@@ -162,7 +162,7 @@ impl Svc {
                 })
                 .unwrap();
 
-            *state
+            (*state).clone()
         };
 
         match state {
@@ -192,7 +192,7 @@ impl Svc {
                 return Err(to_other_io_error("invalid state".into()));
             }
 
-            let prev_state = *state;
+            let prev_state = (*state).clone();
 
             *state = SvcState::WaitClearConfirm;
 
@@ -434,7 +434,7 @@ impl Vc for Svc {
 
             // TODO: confirm this doesn't cause a deadlock...
             // Capture the state before we check the queue...
-            let state = (&*self.state.0.lock().unwrap()).clone();
+            let state = (*self.state.0.lock().unwrap()).clone();
 
             if let Some(data) = queue.pop_front() {
                 // TODO: there could be MORE!
