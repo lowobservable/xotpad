@@ -229,10 +229,6 @@ impl Svc {
     fn new(link: XotLink, channel: u16, params: &X25Params) -> Self {
         let (send_link, recv_link) = split_xot_link(link);
 
-        // Now, wrap the recevier in a thread that will make it easier to handle
-        // timeouts waiting for packets...
-        let recv_link = XotLink2::new(recv_link);
-
         let send_link = Arc::new(Mutex::new(send_link));
 
         let params = Arc::new(RwLock::new(params.clone()));
@@ -269,7 +265,7 @@ impl Svc {
 
     fn run(
         send_link: Arc<Mutex<XotLink>>,
-        mut recv_link: XotLink2,
+        mut recv_link: XotLink,
         channel: u16,
         params: Arc<RwLock<X25Params>>,
         state: Arc<(Mutex<SvcState>, Condvar)>,
@@ -278,16 +274,13 @@ impl Svc {
     ) {
         // release a "running" barrier?
 
-        let timeout = Duration::from_secs(10000); // TODO <= make this None...
-
-        while let Ok(packet) = recv_link.recv_timeout(timeout) {
-            let packet = match packet.map(X25Packet::decode) {
-                Some(Ok(packet)) => Some(packet),
-                Some(Err(err)) => {
+        while let Ok(packet) = recv_link.recv() {
+            let packet = match X25Packet::decode(packet) {
+                Ok(packet) => packet,
+                Err(err) => {
                     dbg!(err);
                     continue;
                 }
-                None => None, // timeout...
             };
 
             let (state, condvar) = &*state;
@@ -303,23 +296,20 @@ impl Svc {
                 }
                 SvcState::WaitCallAccept => {
                     match packet {
-                        Some(X25Packet::CallAccept(call_accept)) => {
+                        X25Packet::CallAccept(call_accept) => {
                             let mut params = params.write().unwrap();
 
                             *params = negotiate(&call_accept, &params);
                             *state = SvcState::DataTransfer(DataTransferState::default());
                         }
-                        Some(X25Packet::ClearRequest(clear_request)) => {
+                        X25Packet::ClearRequest(clear_request) => {
                             // TODO; how to communicate "last" cause?
                             dbg!(clear_request);
                             *state = SvcState::Ready;
                         }
-                        Some(X25Packet::CallRequest(_)) => {
+                        X25Packet::CallRequest(_) => {
                             // TODO: how to communicate collision?
                             *state = SvcState::Ready;
-                        }
-                        None => {
-                            todo!("timeout");
                         }
                         _ => {
                             todo!("ignore?");
@@ -327,7 +317,7 @@ impl Svc {
                     }
                 }
                 SvcState::DataTransfer(mut data_transfer_state) => match packet {
-                    Some(X25Packet::Data(data)) => {
+                    X25Packet::Data(data) => {
                         // validate it...
 
                         // queue it...
@@ -340,24 +330,18 @@ impl Svc {
 
                         // or, send receive ready
                     }
-                    None => {
-                        panic!("this read should not timeout!");
-                    }
                     _ => {
                         todo!("ignore?");
                     }
                 },
                 SvcState::WaitClearConfirm => {
                     match packet {
-                        Some(X25Packet::ClearConfirm(_)) => {
+                        X25Packet::ClearConfirm(_) => {
                             *state = SvcState::Ready;
                         }
-                        Some(X25Packet::ClearRequest(_)) => {
+                        X25Packet::ClearRequest(_) => {
                             // TODO: how to communicate collision?
                             *state = SvcState::Ready;
-                        }
-                        None => {
-                            todo!("timeout");
                         }
                         _ => {
                             todo!("ignore?");
@@ -493,60 +477,4 @@ fn next_seq(seq: u8, modulo: X25Modulo) -> u8 {
 fn to_other_io_error(e: String) -> io::Error {
     //io::Error::other(e)
     io::Error::new(io::ErrorKind::Other, e)
-}
-
-struct XotLink2 {
-    queue: Arc<(Mutex<VecDeque<io::Result<Bytes>>>, Condvar)>,
-}
-
-impl XotLink2 {
-    pub fn new(mut link: XotLink) -> Self {
-        let queue = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
-
-        {
-            let queue = Arc::clone(&queue);
-
-            thread::spawn(move || {
-                let (queue, condvar) = &*queue;
-
-                loop {
-                    let packet = link.recv();
-
-                    let mut queue = queue.lock().unwrap();
-
-                    let is_err = packet.is_err();
-
-                    queue.push_back(packet);
-
-                    condvar.notify_all();
-
-                    if is_err {
-                        break;
-                    }
-                }
-            });
-        }
-
-        XotLink2 { queue }
-    }
-
-    pub fn recv_timeout(&self, timeout: Duration) -> io::Result<Option<Bytes>> {
-        let (queue, condvar) = &*self.queue;
-
-        let mut queue = queue.lock().unwrap();
-
-        loop {
-            if let Some(packet) = queue.pop_front() {
-                return packet.map(Some);
-            }
-
-            let result = condvar.wait_timeout(queue, timeout).unwrap();
-
-            queue = result.0;
-
-            if result.1.timed_out() {
-                return Ok(None);
-            }
-        }
-    }
 }
