@@ -59,7 +59,7 @@ trait Vc {
 
 /*
 impl Svc {
-    pub fn call(...) -> io::Result<Svc>
+    pub fn call(...) -> io::Result<Self>
 
     pub fn listen(link: XotLink, params: &X25Params) -> io::Result<SvcIncomingCall>
 }
@@ -69,11 +69,11 @@ struct SvcIncomingCall(X25CallRequest);
 impl SvcIncomingCall {
     pub fn accept(self) -> Svc
 
-    pub fn clear(self)
+    pub fn clear(self, cause: u8, diagnostic_code: u8)
 }
 */
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Debug)]
 enum SvcState {
     Ready,
     WaitCallAccept,
@@ -84,7 +84,7 @@ enum SvcState {
     // TODO: LinkUnavail - i.e. socket closed ???
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Copy, Clone, Debug)]
 struct DataTransferState {
     send_seq: u8,
     recv_seq: u8,
@@ -130,36 +130,24 @@ impl Svc {
             {
                 let mut state = state.lock().unwrap();
 
-                if *state != SvcState::Ready {
+                if !matches!(*state, SvcState::Ready) {
                     return Err(to_other_io_error("invalid state".into()));
                 }
 
-                *state = SvcState::WaitCallAccept;
+                let call_request =
+                    send_call_request(&svc.send_link, channel, addr, call_user_data, &svc.params)?;
 
-                let params = svc.params.read().unwrap();
-
-                let call_request = X25CallRequest {
-                    modulo: params.modulo,
-                    channel: svc.channel,
-                    called_addr: addr.clone(),
-                    calling_addr: params.addr.clone(),
-                    facilities: (&*params).into(),
-                    call_user_data: call_user_data.clone(),
-                };
-
-                if let Err(err) = Svc::send_packet(&svc.send_link, &call_request.into()) {
-                    // uugh...
-                    *state = SvcState::Ready;
-                    return Err(err);
-                }
+                *state = SvcState::WaitCallAccept; /*(Instant::now(), call_request)*/
             }
+
+            // TODO: trigger the state condvar ourselves here!
 
             // Okay, now we wait...
             let timeout = svc.params.read().unwrap().t21;
 
             let (state, _) = condvar
                 .wait_timeout_while(state.lock().unwrap(), timeout, |state| {
-                    *state == SvcState::WaitCallAccept
+                    matches!(*state, SvcState::WaitCallAccept)
                 })
                 .unwrap();
 
@@ -193,28 +181,17 @@ impl Svc {
                 return Err(to_other_io_error("invalid state".into()));
             }
 
-            let prev_state = (*state).clone();
+            let clear_request = send_clear_request(
+                &self.send_link,
+                self.channel,
+                cause,
+                diagnostic_code,
+                &self.params,
+            )?;
 
             *state = SvcState::WaitClearConfirm;
 
-            let modulo = self.params.read().unwrap().modulo;
-
-            let clear_request = X25ClearRequest {
-                modulo,
-                channel: self.channel,
-                cause,
-                diagnostic_code,
-                called_addr: X121Addr::null(),
-                calling_addr: X121Addr::null(),
-                facilities: Vec::new(),
-                clear_user_data: Bytes::new(),
-            };
-
-            if let Err(err) = Svc::send_packet(&self.send_link, &clear_request.into()) {
-                // uugh...
-                *state = prev_state;
-                return Err(err);
-            }
+            // TODO: notify listeners of the state change here!
         }
 
         // Okay, now we wait...
@@ -222,7 +199,7 @@ impl Svc {
 
         let (state, _) = condvar
             .wait_timeout_while(state.lock().unwrap(), timeout, |state| {
-                *state == SvcState::WaitClearConfirm
+                matches!(*state, SvcState::WaitClearConfirm)
             })
             .unwrap();
 
@@ -312,13 +289,11 @@ impl Svc {
                         *params = negotiate(&call_accept, &params);
                         *state = SvcState::DataTransfer(DataTransferState::default());
                     }
-                    X25Packet::ClearRequest(clear_request) => {
-                        let X25ClearRequest {
-                            cause,
-                            diagnostic_code,
-                            ..
-                        } = clear_request;
-
+                    X25Packet::ClearRequest(X25ClearRequest {
+                        cause,
+                        diagnostic_code,
+                        ..
+                    }) => {
                         *state = SvcState::Clear(Some((cause, diagnostic_code)));
                     }
                     X25Packet::CallRequest(_) => {
@@ -343,22 +318,12 @@ impl Svc {
 
                         // or, send receive ready
                     }
-                    X25Packet::ClearRequest(clear_request) => {
-                        let clear_confirm = X25ClearConfirm {
-                            modulo: params.read().unwrap().modulo,
-                            channel,
-                            called_addr: X121Addr::null(),
-                            calling_addr: X121Addr::null(),
-                            facilities: Vec::new(),
-                        };
-
-                        let _ = Svc::send_packet(&send_link, &clear_confirm.into());
-
-                        let X25ClearRequest {
-                            cause,
-                            diagnostic_code,
-                            ..
-                        } = clear_request;
+                    X25Packet::ClearRequest(X25ClearRequest {
+                        cause,
+                        diagnostic_code,
+                        ..
+                    }) => {
+                        let _ = send_clear_confirm(&send_link, channel, &params);
 
                         *state = SvcState::Clear(Some((cause, diagnostic_code)));
 
@@ -406,16 +371,93 @@ impl Svc {
 
         condvar.notify_all();
     }
+}
 
-    fn send_packet(link: &Mutex<XotLink>, packet: &X25Packet) -> io::Result<()> {
-        let mut buf = BytesMut::new();
+fn send_call_request(
+    link: &Mutex<XotLink>,
+    channel: u16,
+    addr: &X121Addr,
+    call_user_data: &Bytes,
+    params: &RwLock<X25Params>,
+) -> io::Result<X25CallRequest> {
+    let params = params.read().unwrap();
 
-        packet.encode(&mut buf).map_err(to_other_io_error)?;
+    let call_request = X25CallRequest {
+        modulo: params.modulo,
+        channel,
+        called_addr: addr.clone(),
+        calling_addr: params.addr.clone(),
+        facilities: (&*params).into(),
+        call_user_data: call_user_data.clone(),
+    };
 
-        let mut link = link.lock().unwrap();
+    // very hackky...
+    let packet = call_request.into();
+    send_packet(link, &packet)?;
+    let X25Packet::CallRequest(call_request) = packet else { unreachable!() };
 
-        link.send(&buf)
-    }
+    Ok(call_request)
+}
+
+fn send_clear_request(
+    link: &Mutex<XotLink>,
+    channel: u16,
+    cause: u8,
+    diagnostic_code: u8,
+    params: &RwLock<X25Params>,
+) -> io::Result<X25ClearRequest> {
+    let params = params.read().unwrap();
+
+    let clear_request = X25ClearRequest {
+        modulo: params.modulo,
+        channel,
+        cause,
+        diagnostic_code,
+        called_addr: X121Addr::null(),
+        calling_addr: X121Addr::null(),
+        facilities: Vec::new(),
+        clear_user_data: Bytes::new(),
+    };
+
+    // very hackky...
+    let packet = clear_request.into();
+    send_packet(link, &packet)?;
+    let X25Packet::ClearRequest(clear_request) = packet else { unreachable!() };
+
+    Ok(clear_request)
+}
+
+fn send_clear_confirm(
+    link: &Mutex<XotLink>,
+    channel: u16,
+    params: &RwLock<X25Params>,
+) -> io::Result<X25ClearConfirm> {
+    let params = params.read().unwrap();
+
+    let clear_confirm = X25ClearConfirm {
+        modulo: params.modulo,
+        channel,
+        called_addr: X121Addr::null(),
+        calling_addr: X121Addr::null(),
+        facilities: Vec::new(),
+    };
+
+    // very hackky...
+    let packet = clear_confirm.into();
+    send_packet(link, &packet)?;
+    let X25Packet::ClearConfirm(clear_confirm) = packet else { unreachable!() };
+
+    Ok(clear_confirm)
+}
+
+fn send_packet(link: &Mutex<XotLink>, packet: &X25Packet) -> io::Result<()> {
+    let mut buf = BytesMut::new();
+
+    packet.encode(&mut buf).map_err(to_other_io_error)?;
+
+    let mut link = link.lock().unwrap();
+
+    link.send(&buf)
 }
 
 impl Vc for Svc {
@@ -495,7 +537,7 @@ fn main() -> io::Result<()> {
         t23: Duration::from_secs(5),
     };
 
-    let tcp_stream = TcpStream::connect(("pac1", xot::TCP_PORT))?;
+    let tcp_stream = TcpStream::connect(("localhost", xot::TCP_PORT))?;
 
     let xot_link = XotLink::new(tcp_stream);
 
