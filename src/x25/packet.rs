@@ -106,6 +106,21 @@ impl X25Packet {
         }
     }
 
+    /// Returns the channel number of this `X25Packet`.
+    pub fn channel(&self) -> Option<u16> {
+        match self {
+            X25Packet::CallRequest(call_request) => Some(call_request.channel),
+            X25Packet::CallAccept(call_accepted) => Some(call_accepted.channel),
+            X25Packet::ClearRequest(clear_request) => Some(clear_request.channel),
+            X25Packet::ClearConfirm(clear_confirm) => Some(clear_confirm.channel),
+            X25Packet::Data(data) => Some(data.channel),
+            X25Packet::ReceiveReady(receive_ready) => Some(receive_ready.channel),
+            X25Packet::ReceiveNotReady(receive_not_ready) => Some(receive_not_ready.channel),
+            X25Packet::ResetRequest(reset_request) => Some(reset_request.channel),
+            X25Packet::ResetConfirm(reset_confirm) => Some(reset_confirm.channel),
+        }
+    }
+
     /// Encodes this `X25Packet` into the buffer provided.
     pub fn encode(&self, buf: &mut BytesMut) -> Result<usize, String> {
         match self {

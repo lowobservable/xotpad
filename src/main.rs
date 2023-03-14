@@ -90,6 +90,7 @@ struct DataTransferState {
     // ...
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for DataTransferState {
     fn default() -> Self {
         DataTransferState {
@@ -167,14 +168,11 @@ impl Svc {
         match state {
             SvcState::DataTransfer(_) => Ok(svc),
             SvcState::Clear(request) => {
-                let (cause, diagnostic_code) = match request {
-                    Some(request) => request,
-                    None => (0, 0),
-                };
+                let (cause, diagnostic_code) = request.unwrap_or((0, 0));
 
                 let message = format!("call cleared: {cause} - {diagnostic_code}");
 
-                return Err(to_other_io_error(message));
+                Err(to_other_io_error(message))
             }
             SvcState::WaitCallAccept => Err(to_other_io_error("T21 timeout".into())),
             _ => unreachable!(),
@@ -291,7 +289,9 @@ impl Svc {
                 }
             };
 
-            // TODO: check packet channel
+            if packet.channel().is_some() && packet.channel().unwrap() != channel {
+                todo!("probably just need to ingore this...");
+            }
 
             let (state, condvar) = &*state;
 
