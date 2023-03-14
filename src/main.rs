@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use xotpad::x121::X121Addr;
 use xotpad::x25::{
-    X25CallAccept, X25CallRequest, X25ClearRequest, X25Data, X25Facility, X25Modulo, X25Packet,
+    X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Facility,
+    X25Modulo, X25Packet,
 };
 use xotpad::xot::{self, XotLink};
 
@@ -304,32 +305,30 @@ impl Svc {
                     // probably goes straight to DataTransfer?
                     unimplemented!("state == ready");
                 }
-                SvcState::WaitCallAccept => {
-                    match packet {
-                        X25Packet::CallAccept(call_accept) => {
-                            let mut params = params.write().unwrap();
+                SvcState::WaitCallAccept => match packet {
+                    X25Packet::CallAccept(call_accept) => {
+                        let mut params = params.write().unwrap();
 
-                            *params = negotiate(&call_accept, &params);
-                            *state = SvcState::DataTransfer(DataTransferState::default());
-                        }
-                        X25Packet::ClearRequest(clear_request) => {
-                            let X25ClearRequest {
-                                cause,
-                                diagnostic_code,
-                                ..
-                            } = clear_request;
-
-                            *state = SvcState::Clear(Some((cause, diagnostic_code)));
-                        }
-                        X25Packet::CallRequest(_) => {
-                            // TODO: how to communicate collision?
-                            *state = SvcState::Ready;
-                        }
-                        _ => {
-                            todo!("ignore?");
-                        }
+                        *params = negotiate(&call_accept, &params);
+                        *state = SvcState::DataTransfer(DataTransferState::default());
                     }
-                }
+                    X25Packet::ClearRequest(clear_request) => {
+                        let X25ClearRequest {
+                            cause,
+                            diagnostic_code,
+                            ..
+                        } = clear_request;
+
+                        *state = SvcState::Clear(Some((cause, diagnostic_code)));
+                    }
+                    X25Packet::CallRequest(_) => {
+                        // TODO: how to communicate collision?
+                        *state = SvcState::Ready;
+                    }
+                    _ => {
+                        todo!("ignore?");
+                    }
+                },
                 SvcState::DataTransfer(mut data_transfer_state) => match packet {
                     X25Packet::Data(data) => {
                         // validate it...
@@ -344,29 +343,45 @@ impl Svc {
 
                         // or, send receive ready
                     }
-                    X25Packet::ClearRequest(_) => {
-                        // TODO: we need to WAKE UP the recv queue tooo here to
-                        // as this will be indicated to the user via recv()...
-                        todo!();
+                    X25Packet::ClearRequest(clear_request) => {
+                        let clear_confirm = X25ClearConfirm {
+                            modulo: params.read().unwrap().modulo,
+                            channel,
+                            called_addr: X121Addr::null(),
+                            calling_addr: X121Addr::null(),
+                            facilities: Vec::new(),
+                        };
+
+                        let _ = Svc::send_packet(&send_link, &clear_confirm.into());
+
+                        let X25ClearRequest {
+                            cause,
+                            diagnostic_code,
+                            ..
+                        } = clear_request;
+
+                        *state = SvcState::Clear(Some((cause, diagnostic_code)));
+
+                        // Wake up the recv_queue waiters, as this is how the
+                        // user will be notified of the clearing.
+                        recv_queue.1.notify_all();
                     }
                     _ => {
                         todo!("ignore?");
                     }
                 },
-                SvcState::WaitClearConfirm => {
-                    match packet {
-                        X25Packet::ClearConfirm(_) => {
-                            *state = SvcState::Clear(None);
-                        }
-                        X25Packet::ClearRequest(_) => {
-                            // TODO: how to communicate collision?
-                            *state = SvcState::Ready;
-                        }
-                        _ => {
-                            todo!("ignore?");
-                        }
+                SvcState::WaitClearConfirm => match packet {
+                    X25Packet::ClearConfirm(_) => {
+                        *state = SvcState::Clear(None);
                     }
-                }
+                    X25Packet::ClearRequest(_) => {
+                        // TODO: how to communicate collision?
+                        *state = SvcState::Ready;
+                    }
+                    _ => {
+                        todo!("ignore?");
+                    }
+                },
                 SvcState::Clear(..) => {
                     // It is up to the call(), clear() or recv() methods to return
                     // us to ready.
@@ -484,8 +499,7 @@ fn main() -> io::Result<()> {
 
     let xot_link = XotLink::new(tcp_stream);
 
-    //let addr = X121Addr::from_str("737101").unwrap();
-    let addr = X121Addr::from_str("9999").unwrap();
+    let addr = X121Addr::from_str("73710301").unwrap();
     let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
     let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &x25_params)?;
