@@ -79,6 +79,7 @@ enum SvcState {
     DataTransfer(DataTransferState),
     //WaitResetConfirm,
     WaitClearConfirm,
+    Clear(Option<(u8, u8)>),
     // TODO: LinkUnavail - i.e. socket closed ???
 }
 
@@ -165,9 +166,16 @@ impl Svc {
 
         match state {
             SvcState::DataTransfer(_) => Ok(svc),
-            SvcState::Ready => Err(to_other_io_error(
-                "rejected but I don't know how to tell you why just yet".into(),
-            )),
+            SvcState::Clear(request) => {
+                let (cause, diagnostic_code) = match request {
+                    Some(request) => request,
+                    None => (0, 0),
+                };
+
+                let message = format!("call cleared: {cause} - {diagnostic_code}");
+
+                return Err(to_other_io_error(message));
+            }
             SvcState::WaitCallAccept => Err(to_other_io_error("T21 timeout".into())),
             _ => unreachable!(),
         }
@@ -220,7 +228,7 @@ impl Svc {
             .unwrap();
 
         match *state {
-            SvcState::Ready => Ok(()),
+            SvcState::Clear(..) => Ok(()),
             SvcState::WaitClearConfirm => Err(to_other_io_error("T23 timeout".into())),
             _ => unreachable!(),
         }
@@ -283,6 +291,8 @@ impl Svc {
                 }
             };
 
+            // TODO: check packet channel
+
             let (state, condvar) = &*state;
 
             let mut state = state.lock().unwrap();
@@ -303,9 +313,13 @@ impl Svc {
                             *state = SvcState::DataTransfer(DataTransferState::default());
                         }
                         X25Packet::ClearRequest(clear_request) => {
-                            // TODO; how to communicate "last" cause?
-                            dbg!(clear_request);
-                            *state = SvcState::Ready;
+                            let X25ClearRequest {
+                                cause,
+                                diagnostic_code,
+                                ..
+                            } = clear_request;
+
+                            *state = SvcState::Clear(Some((cause, diagnostic_code)));
                         }
                         X25Packet::CallRequest(_) => {
                             // TODO: how to communicate collision?
@@ -330,6 +344,11 @@ impl Svc {
 
                         // or, send receive ready
                     }
+                    X25Packet::ClearRequest(_) => {
+                        // TODO: we need to WAKE UP the recv queue tooo here to
+                        // as this will be indicated to the user via recv()...
+                        todo!();
+                    }
                     _ => {
                         todo!("ignore?");
                     }
@@ -337,7 +356,7 @@ impl Svc {
                 SvcState::WaitClearConfirm => {
                     match packet {
                         X25Packet::ClearConfirm(_) => {
-                            *state = SvcState::Ready;
+                            *state = SvcState::Clear(None);
                         }
                         X25Packet::ClearRequest(_) => {
                             // TODO: how to communicate collision?
@@ -347,6 +366,10 @@ impl Svc {
                             todo!("ignore?");
                         }
                     }
+                }
+                SvcState::Clear(..) => {
+                    // It is up to the call(), clear() or recv() methods to return
+                    // us to ready.
                 }
             }
 
@@ -409,12 +432,32 @@ impl Vc for Svc {
             //    return Err(io::Error::new(io::ErrorKind::ConnectionReset, "...".into()));
             //}
 
+            // TODO: confirm this doesn't cause a deadlock...
+            // Capture the state before we check the queue...
+            let state = (&*self.state.0.lock().unwrap()).clone();
+
             if let Some(data) = queue.pop_front() {
                 // TODO: there could be MORE!
                 return Ok((data.user_data, data.qualifier));
             }
 
-            queue = condvar.wait(queue).unwrap();
+            // There isn't any data...
+            match state {
+                SvcState::Ready | SvcState::WaitCallAccept => {
+                    return Err(to_other_io_error("Not connected".into()));
+                }
+                SvcState::Clear(request) => {
+                    let (cause, diagnostic_code) = request.unwrap_or((0, 0));
+
+                    let message = format!("call cleared: {cause} - {diagnostic_code}");
+
+                    return Err(to_other_io_error(message));
+                }
+                // TODO: LinkUnavail - i.e. socket closed ???
+                _ => {
+                    queue = condvar.wait(queue).unwrap();
+                }
+            };
         }
     }
 }
@@ -441,7 +484,8 @@ fn main() -> io::Result<()> {
 
     let xot_link = XotLink::new(tcp_stream);
 
-    let addr = X121Addr::from_str("737101").unwrap();
+    //let addr = X121Addr::from_str("737101").unwrap();
+    let addr = X121Addr::from_str("9999").unwrap();
     let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
     let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &x25_params)?;
