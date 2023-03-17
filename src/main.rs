@@ -3,9 +3,9 @@ use std::collections::VecDeque;
 use std::io;
 use std::net::TcpStream;
 use std::str::FromStr;
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use xotpad::x121::X121Addr;
 use xotpad::x25::{
@@ -73,18 +73,20 @@ impl SvcIncomingCall {
 }
 */
 
-#[derive(Clone, Debug)]
-enum SvcState {
+#[derive(Debug)]
+enum VcState {
     Ready,
-    WaitCallAccept,
+    WaitCallAccept(Instant),
     DataTransfer(DataTransferState),
     //WaitResetConfirm,
-    WaitClearConfirm,
+    WaitClearConfirm(Instant),
+
+    // These are our custom ones...
     Clear(Option<(u8, u8)>),
-    // TODO: LinkUnavail - i.e. socket closed ???
+    OutOfOrder,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Debug)]
 struct DataTransferState {
     send_seq: u8,
     recv_seq: u8,
@@ -102,16 +104,7 @@ impl Default for DataTransferState {
     }
 }
 
-struct Svc {
-    send_link: Arc<Mutex<XotLink>>, // does this really need to have a lock?
-    channel: u16,
-    // TODO: if call / listen handled the bootstrapping better, this would
-    // not need a lock, right?
-    params: Arc<RwLock<X25Params>>,
-    state: Arc<(Mutex<SvcState>, Condvar)>,
-    send_queue: Arc<(Mutex<VecDeque<(Bytes, bool)>>, Condvar)>,
-    recv_queue: Arc<(Mutex<VecDeque<X25Data>>, Condvar)>,
-}
+struct Svc(Arc<VcInner>);
 
 impl Svc {
     pub fn call(
@@ -123,271 +116,415 @@ impl Svc {
     ) -> io::Result<Self> {
         let svc = Svc::new(link, channel, params);
 
-        let state = {
-            let (state, condvar) = &*svc.state;
+        svc.0.call(addr, call_user_data)?;
 
-            // Send the call request...
-            {
-                let mut state = state.lock().unwrap();
-
-                if !matches!(*state, SvcState::Ready) {
-                    return Err(to_other_io_error("invalid state".into()));
-                }
-
-                let call_request =
-                    send_call_request(&svc.send_link, channel, addr, call_user_data, &svc.params)?;
-
-                *state = SvcState::WaitCallAccept; /*(Instant::now(), call_request)*/
-            }
-
-            // TODO: trigger the state condvar ourselves here!
-
-            // Okay, now we wait...
-            let timeout = svc.params.read().unwrap().t21;
-
-            let (state, _) = condvar
-                .wait_timeout_while(state.lock().unwrap(), timeout, |state| {
-                    matches!(*state, SvcState::WaitCallAccept)
-                })
-                .unwrap();
-
-            (*state).clone()
-        };
-
-        match state {
-            SvcState::DataTransfer(_) => Ok(svc),
-            SvcState::Clear(request) => {
-                let (cause, diagnostic_code) = request.unwrap_or((0, 0));
-
-                let message = format!("call cleared: {cause} - {diagnostic_code}");
-
-                Err(to_other_io_error(message))
-            }
-            SvcState::WaitCallAccept => Err(to_other_io_error("T21 timeout".into())),
-            _ => unreachable!(),
-        }
+        Ok(svc)
     }
 
-    // TODO: this will only be used on a active "svc" not an 'incoming call'
     pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
-        let (state, condvar) = &*self.state;
+        self.0.clear(cause, diagnostic_code)
+    }
 
-        // Send the clear request...
-        {
-            let mut state = state.lock().unwrap();
+    pub fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
+        self.0.send(user_data, qualifier)
+    }
 
-            if !(matches!(*state, SvcState::DataTransfer(_))/*|| *state == SvcState::WaitResetConfirm)*/)
-            {
-                return Err(to_other_io_error("invalid state".into()));
-            }
+    pub fn recv(&self) -> io::Result<(Bytes, bool)> {
+        self.0.recv()
+    }
 
-            let clear_request = send_clear_request(
-                &self.send_link,
-                self.channel,
-                cause,
-                diagnostic_code,
-                &self.params,
-            )?;
-
-            *state = SvcState::WaitClearConfirm;
-
-            // TODO: notify listeners of the state change here!
-        }
-
-        // Okay, now we wait...
-        let timeout = self.params.read().unwrap().t23;
-
-        let (state, _) = condvar
-            .wait_timeout_while(state.lock().unwrap(), timeout, |state| {
-                matches!(*state, SvcState::WaitClearConfirm)
-            })
-            .unwrap();
-
-        match *state {
-            SvcState::Clear(..) => Ok(()),
-            SvcState::WaitClearConfirm => Err(to_other_io_error("T23 timeout".into())),
-            _ => unreachable!(),
-        }
+    pub fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
+        self.0.reset(cause, diagnostic_code)
     }
 
     fn new(link: XotLink, channel: u16, params: &X25Params) -> Self {
         let (send_link, recv_link) = split_xot_link(link);
 
-        let send_link = Arc::new(Mutex::new(send_link));
+        let inner = Arc::new(VcInner::new(send_link, channel, params));
 
-        let params = Arc::new(RwLock::new(params.clone()));
-        let state = Arc::new((Mutex::new(SvcState::Ready), Condvar::new()));
-        let send_queue = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
-        let recv_queue = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
+        let barrier = Arc::new(Barrier::new(2));
 
-        // start the packet receiver thread...
         thread::spawn({
-            let send_link = Arc::clone(&send_link);
-            let params = Arc::clone(&params);
-            let state = Arc::clone(&state);
-            let send_queue = Arc::clone(&send_queue);
+            let inner = Arc::clone(&inner);
+            let barrier = Arc::clone(&barrier);
+
+            move || inner.run(recv_link, barrier)
+        });
+
+        barrier.wait();
+
+        Svc(inner)
+    }
+}
+
+struct VcInner {
+    send_link: Arc<Mutex<XotLink>>, // does this really need to have a lock?
+    engine_recv: Arc<Condvar>,
+    channel: u16,
+    state: Arc<(Mutex<VcState>, Condvar)>,
+    params: Arc<RwLock<X25Params>>,
+    send_data_queue: Arc<(Mutex<VecDeque<(Bytes, bool)>>, Condvar)>,
+    recv_data_queue: Arc<(Mutex<VecDeque<X25Data>>, Condvar)>,
+}
+
+impl VcInner {
+    fn new(send_link: XotLink, channel: u16, params: &X25Params) -> Self {
+        let state = VcState::Ready;
+
+        VcInner {
+            send_link: Arc::new(Mutex::new(send_link)),
+            engine_recv: Arc::new(Condvar::new()),
+            channel,
+            state: Arc::new((Mutex::new(state), Condvar::new())),
+            params: Arc::new(RwLock::new(params.clone())),
+            send_data_queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
+            recv_data_queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
+        }
+    }
+
+    fn run(&self, mut recv_link: XotLink, barrier: Arc<Barrier>) {
+        println!("VC engine starting...");
+
+        // Create another thread that reads packets, this will allow the main loop
+        // wait to be interrupted while the XOT socket read is blocked.
+        let recv_queue = Arc::new(Mutex::new(VecDeque::<io::Result<Bytes>>::new()));
+
+        thread::spawn({
             let recv_queue = Arc::clone(&recv_queue);
+            let engine_recv = Arc::clone(&self.engine_recv);
 
             move || {
-                Svc::run(
-                    send_link, recv_link, channel, params, state, send_queue, recv_queue,
-                )
+                loop {
+                    let packet = recv_link.recv();
+
+                    let is_err = packet.is_err();
+
+                    recv_queue.lock().unwrap().push_back(packet);
+                    engine_recv.notify_all();
+
+                    if is_err {
+                        break;
+                    }
+                }
+
+                println!("recv link done!");
             }
         });
 
-        // TODO: wait on a "running" barrier?
+        barrier.wait();
 
-        Svc {
-            send_link,
-            channel,
-            params,
-            state,
-            send_queue,
-            recv_queue,
-        }
-    }
+        let mut recv_queue = recv_queue.lock().unwrap();
 
-    fn run(
-        send_link: Arc<Mutex<XotLink>>,
-        mut recv_link: XotLink,
-        channel: u16,
-        params: Arc<RwLock<X25Params>>,
-        state: Arc<(Mutex<SvcState>, Condvar)>,
-        send_queue: Arc<(Mutex<VecDeque<(Bytes, bool)>>, Condvar)>,
-        recv_queue: Arc<(Mutex<VecDeque<X25Data>>, Condvar)>,
-    ) {
-        // release a "running" barrier?
+        loop {
+            let mut timeout = Duration::from_secs(1); // TODO
 
-        while let Ok(packet) = recv_link.recv() {
-            let packet = match X25Packet::decode(packet) {
+            let packet = recv_queue.pop_front();
+
+            dbg!(&packet);
+
+            // Handle a XOT link error, otherwise pass along the packet.
+            let packet = match packet.transpose() {
                 Ok(packet) => packet,
-                Err(err) => {
-                    dbg!(err);
-                    continue;
+                Err(_) => {
+                    let mut state = self.state.0.lock().unwrap();
+
+                    self.change_state(&mut state, VcState::OutOfOrder, false, true);
+
+                    break;
                 }
             };
 
-            if packet.channel().is_some() && packet.channel().unwrap() != channel {
-                todo!("probably just need to ingore this...");
+            // Decode the packet.
+            let packet = match packet.map(X25Packet::decode).transpose() {
+                Ok(packet) => packet,
+                Err(err) => {
+                    dbg!(err);
+                    todo!();
+                }
+            };
+
+            // Validate the packet.
+            if let Some(ref packet) = packet {
+                // ...
             }
 
-            let (state, condvar) = &*state;
+            // Handle the packet.
+            {
+                let mut state = self.state.0.lock().unwrap();
 
-            let mut state = state.lock().unwrap();
+                match *state {
+                    VcState::Ready => {}
+                    VcState::WaitCallAccept(start_time) => {
+                        let elapsed = start_time.elapsed();
+                        let t21 = self.params.read().unwrap().t21;
 
-            match *state {
-                SvcState::Ready => {
-                    // uggghh, we only expect an incoming call I guess?
-                    // or reset... if this was a PVC - actually PVC
-                    // probably goes straight to DataTransfer?
-                    unimplemented!("state == ready");
-                }
-                SvcState::WaitCallAccept => match packet {
-                    X25Packet::CallAccept(call_accept) => {
-                        let mut params = params.write().unwrap();
+                        match packet {
+                            Some(X25Packet::CallAccept(call_accept)) => {
+                                let mut params = self.params.write().unwrap();
 
-                        *params = negotiate(&call_accept, &params);
-                        *state = SvcState::DataTransfer(DataTransferState::default());
-                    }
-                    X25Packet::ClearRequest(X25ClearRequest {
-                        cause,
-                        diagnostic_code,
-                        ..
-                    }) => {
-                        *state = SvcState::Clear(Some((cause, diagnostic_code)));
-                    }
-                    X25Packet::CallRequest(_) => {
-                        // TODO: how to communicate collision?
-                        *state = SvcState::Ready;
-                    }
-                    _ => {
-                        todo!("ignore?");
-                    }
-                },
-                SvcState::DataTransfer(mut data_transfer_state) => match packet {
-                    X25Packet::Data(data) => {
-                        // validate it...
+                                // TODO: can negotiation "fail"?
+                                *params = negotiate(&call_accept, &params);
 
-                        // queue it...
-                        Svc::queue_recv_data(&recv_queue, data);
+                                self.change_state(
+                                    &mut state,
+                                    VcState::DataTransfer(DataTransferState::default()),
+                                    false,
+                                    false,
+                                );
+                            }
+                            Some(X25Packet::ClearRequest(X25ClearRequest {
+                                cause,
+                                diagnostic_code,
+                                ..
+                            })) => {
+                                self.change_state(
+                                    &mut state,
+                                    VcState::Clear(Some((cause, diagnostic_code))),
+                                    false,
+                                    false,
+                                );
+                            }
+                            Some(_) => {
+                                // TODO: ignore?
+                            }
+                            None if elapsed > t21 => {
+                                println!("T21 timeout, sending clear request...");
 
-                        // update window...
-                        data_transfer_state.recv_seq = 9; // TODO...
+                                if send_clear_request(
+                                    &mut self.send_link.lock().unwrap(),
+                                    self.channel,
+                                    19, // Local procedure error
+                                    49, // Time expired for incoming call
+                                    &self.params.read().unwrap(),
+                                )
+                                .is_err()
+                                {
+                                    todo!();
+                                } else {
+                                    self.change_state(
+                                        &mut state,
+                                        VcState::WaitClearConfirm(Instant::now()),
+                                        false,
+                                        false,
+                                    );
 
-                        // release anything from the send queue...
+                                    // TODO: we could be smarter about the next timeout here...
+                                    timeout = Duration::from_secs(1);
+                                }
+                            }
+                            None => timeout = t21 - elapsed,
+                        }
+                    }
+                    VcState::DataTransfer(_) => {
+                        match packet {
+                            Some(X25Packet::Data(data)) => {
+                                // validate and update windows...
 
-                        // or, send receive ready
-                    }
-                    X25Packet::ClearRequest(X25ClearRequest {
-                        cause,
-                        diagnostic_code,
-                        ..
-                    }) => {
-                        let _ = send_clear_confirm(&send_link, channel, &params);
+                                self.queue_recv_data(data);
 
-                        *state = SvcState::Clear(Some((cause, diagnostic_code)));
+                                // send any queued packets, or respond with RR...
+                            }
+                            Some(_) => {
+                                // TODO: ignore?
+                            }
+                            None => {}
+                        }
+                    }
+                    //WaitResetConfirm,
+                    VcState::WaitClearConfirm(start_time) => {
+                        let elapsed = start_time.elapsed();
+                        let t23 = self.params.read().unwrap().t23;
 
-                        // Wake up the recv_queue waiters, as this is how the
-                        // user will be notified of the clearing.
-                        recv_queue.1.notify_all();
+                        match packet {
+                            Some(X25Packet::ClearConfirm(_)) => {
+                                self.change_state(&mut state, VcState::Clear(None), false, false);
+                            }
+                            Some(X25Packet::ClearRequest(_)) => todo!(),
+                            Some(_) => {
+                                // TODO: ignore?
+                            }
+                            None if elapsed > t23 => {
+                                println!("T23 timeout");
+
+                                // TODO:
+                                // For a timeout on a "call request timeout" that leads to a clear
+                                // request Cisco sends "time expired for clear indication" twice (2
+                                // retries of THIS state).
+                                //
+                                // what does it do for a user initiated clear?
+
+                                self.change_state(&mut state, VcState::OutOfOrder, false, false);
+
+                                break;
+                            }
+                            None => timeout = t23 - elapsed,
+                        }
                     }
-                    _ => {
-                        todo!("ignore?");
+                    VcState::Clear(_) | VcState::OutOfOrder => {
+                        panic!("unexpected state")
                     }
-                },
-                SvcState::WaitClearConfirm => match packet {
-                    X25Packet::ClearConfirm(_) => {
-                        *state = SvcState::Clear(None);
-                    }
-                    X25Packet::ClearRequest(_) => {
-                        // TODO: how to communicate collision?
-                        *state = SvcState::Ready;
-                    }
-                    _ => {
-                        todo!("ignore?");
-                    }
-                },
-                SvcState::Clear(..) => {
-                    // It is up to the call(), clear() or recv() methods to return
-                    // us to ready.
                 }
             }
 
-            condvar.notify_all();
+            (recv_queue, _) = self.engine_recv.wait_timeout(recv_queue, timeout).unwrap();
         }
 
-        println!("runner done running...");
+        println!("VC engine done!");
     }
 
-    fn send_queued_data() -> io::Result<(usize, usize)> {
+    fn call(&self, addr: &X121Addr, call_user_data: &Bytes) -> io::Result<()> {
+        // Send the call request packet.
+        {
+            let mut state = self.state.0.lock().unwrap();
+
+            if !matches!(*state, VcState::Ready) {
+                todo!("invalid state");
+            }
+
+            send_call_request(
+                &mut self.send_link.lock().unwrap(),
+                self.channel,
+                addr,
+                call_user_data,
+                &self.params.read().unwrap(),
+            )?;
+
+            self.change_state(
+                &mut state,
+                VcState::WaitCallAccept(Instant::now()),
+                true,
+                false,
+            );
+        }
+
+        // Wait for the result.
+        let mut state = self.state.0.lock().unwrap();
+
+        while matches!(*state, VcState::WaitCallAccept(_)) {
+            state = self.state.1.wait(state).unwrap();
+        }
+
+        match *state {
+            VcState::DataTransfer(_) => Ok(()),
+            VcState::Clear(clear) => {
+                let (cause, diagnostic_code) = clear.unwrap_or((0, 0));
+
+                let msg = format!("CLR {cause} - {diagnostic_code}");
+
+                Err(io::Error::new(io::ErrorKind::ConnectionRefused, msg))
+            }
+            VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
+            _ => panic!("unexpected state"),
+        }
+    }
+
+    fn clear(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
+        // Send the clear request packet.
+        {
+            let mut state = self.state.0.lock().unwrap();
+
+            if !matches!(
+                *state,
+                VcState::DataTransfer(_) /* | VcState::WaitResetConfirm*/
+            ) {
+                todo!("invalid state");
+            }
+
+            send_clear_request(
+                &mut self.send_link.lock().unwrap(),
+                self.channel,
+                cause,
+                diagnostic_code,
+                &self.params.read().unwrap(),
+            )?;
+
+            self.change_state(
+                &mut state,
+                VcState::WaitClearConfirm(Instant::now()),
+                true,
+                true,
+            );
+        }
+
+        // Wait for the result.
+        let mut state = self.state.0.lock().unwrap();
+
+        while matches!(*state, VcState::WaitClearConfirm(_)) {
+            state = self.state.1.wait(state).unwrap();
+        }
+
+        match *state {
+            VcState::Clear(_) => {
+                self.change_state(&mut state, VcState::Ready, true, false);
+
+                Ok(())
+            }
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
+            _ => panic!("unexpected state"),
+        }
+    }
+
+    fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
+        todo!()
+    }
+
+    fn recv(&self) -> io::Result<(Bytes, bool)> {
+        todo!()
+    }
+
+    fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
+        todo!()
+    }
+
+    // ...
+
+    fn send_queued_data(&self) -> io::Result<(usize, usize)> {
         // returns (pkts sent, pkts remaining)...
         todo!()
     }
 
-    fn queue_recv_data((queue, condvar): &(Mutex<VecDeque<X25Data>>, Condvar), data: X25Data) {
-        let mut queue = queue.lock().unwrap();
+    fn queue_recv_data(&self, data: X25Data) {
+        let mut queue = self.recv_data_queue.0.lock().unwrap();
 
         queue.push_back(data);
+        self.recv_data_queue.1.notify_all();
+    }
 
-        condvar.notify_all();
+    fn change_state(
+        &self,
+        state: &mut VcState,
+        new_state: VcState,
+        wake_engine_recv: bool,
+        wake_user_recv: bool,
+    ) {
+        *state = new_state;
+
+        self.state.1.notify_all();
+
+        if wake_engine_recv {
+            self.engine_recv.notify_all();
+        }
+
+        if wake_user_recv {
+            self.recv_data_queue.1.notify_all();
+        }
     }
 }
 
 fn send_call_request(
-    link: &Mutex<XotLink>,
+    link: &mut XotLink,
     channel: u16,
     addr: &X121Addr,
     call_user_data: &Bytes,
-    params: &RwLock<X25Params>,
+    params: &X25Params,
 ) -> io::Result<X25CallRequest> {
-    let params = params.read().unwrap();
-
     let call_request = X25CallRequest {
         modulo: params.modulo,
         channel,
         called_addr: addr.clone(),
         calling_addr: params.addr.clone(),
-        facilities: (&*params).into(),
+        facilities: params.into(),
         call_user_data: call_user_data.clone(),
     };
 
@@ -400,14 +537,12 @@ fn send_call_request(
 }
 
 fn send_clear_request(
-    link: &Mutex<XotLink>,
+    link: &mut XotLink,
     channel: u16,
     cause: u8,
     diagnostic_code: u8,
-    params: &RwLock<X25Params>,
+    params: &X25Params,
 ) -> io::Result<X25ClearRequest> {
-    let params = params.read().unwrap();
-
     let clear_request = X25ClearRequest {
         modulo: params.modulo,
         channel,
@@ -428,12 +563,10 @@ fn send_clear_request(
 }
 
 fn send_clear_confirm(
-    link: &Mutex<XotLink>,
+    link: &mut XotLink,
     channel: u16,
-    params: &RwLock<X25Params>,
+    params: &X25Params,
 ) -> io::Result<X25ClearConfirm> {
-    let params = params.read().unwrap();
-
     let clear_confirm = X25ClearConfirm {
         modulo: params.modulo,
         channel,
@@ -450,73 +583,12 @@ fn send_clear_confirm(
     Ok(clear_confirm)
 }
 
-fn send_packet(link: &Mutex<XotLink>, packet: &X25Packet) -> io::Result<()> {
+fn send_packet(link: &mut XotLink, packet: &X25Packet) -> io::Result<()> {
     let mut buf = BytesMut::new();
 
     packet.encode(&mut buf).map_err(to_other_io_error)?;
 
-    let mut link = link.lock().unwrap();
-
     link.send(&buf)
-}
-
-impl Vc for Svc {
-    fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
-        // TODO: check that things aren't dead... maybe?
-
-        let (queue, condvar) = &*self.send_queue;
-
-        let mut queue = queue.lock().unwrap();
-
-        // TODO: split user_data into chunks based on max send packet size...
-        queue.push_back((user_data, qualifier));
-
-        condvar.notify_all();
-
-        Ok(())
-    }
-
-    fn recv(&self) -> io::Result<(Bytes, bool)> {
-        let (queue, condvar) = &*self.recv_queue;
-
-        let mut queue = queue.lock().unwrap();
-
-        // TODO: this should "reconstruct" MORE packets...
-
-        loop {
-            // TODO...
-            //if queue.is_none() {
-            //    return Err(io::Error::new(io::ErrorKind::ConnectionReset, "...".into()));
-            //}
-
-            // TODO: confirm this doesn't cause a deadlock...
-            // Capture the state before we check the queue...
-            let state = (*self.state.0.lock().unwrap()).clone();
-
-            if let Some(data) = queue.pop_front() {
-                // TODO: there could be MORE!
-                return Ok((data.user_data, data.qualifier));
-            }
-
-            // There isn't any data...
-            match state {
-                SvcState::Ready | SvcState::WaitCallAccept => {
-                    return Err(to_other_io_error("Not connected".into()));
-                }
-                SvcState::Clear(request) => {
-                    let (cause, diagnostic_code) = request.unwrap_or((0, 0));
-
-                    let message = format!("call cleared: {cause} - {diagnostic_code}");
-
-                    return Err(to_other_io_error(message));
-                }
-                // TODO: LinkUnavail - i.e. socket closed ???
-                _ => {
-                    queue = condvar.wait(queue).unwrap();
-                }
-            };
-        }
-    }
 }
 
 fn split_xot_link(link: XotLink) -> (XotLink, XotLink) {
@@ -537,35 +609,24 @@ fn main() -> io::Result<()> {
         t23: Duration::from_secs(5),
     };
 
-    let tcp_stream = TcpStream::connect(("localhost", xot::TCP_PORT))?;
+    let tcp_stream = TcpStream::connect(("pac1", xot::TCP_PORT))?;
 
     let xot_link = XotLink::new(tcp_stream);
 
-    let addr = X121Addr::from_str("73710301").unwrap();
+    let addr = X121Addr::from_str("737101").unwrap();
     let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
     let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &x25_params)?;
 
-    println!("COM!!!");
-
-    loop {
-        let data = svc.recv()?;
-
-        dbg!(&data);
-
-        if data.0.ends_with(b"Password: ") {
-            /*
-            println!("y0!");
-
-            svc.send(Bytes::from_static(b"password\r"), false)?;
-            */
-            break;
-        }
+    while let Ok((data, qualifier)) = svc.recv() {
+        println!("{:?}", data);
     }
 
     svc.clear(0, 0)?;
 
     println!("all done!");
+
+    thread::sleep(Duration::from_secs(2));
 
     Ok(())
 }
