@@ -1,7 +1,7 @@
 use bytes::{Bytes, BytesMut};
 use std::collections::VecDeque;
 use std::io;
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock};
 use std::thread;
@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use xotpad::x121::X121Addr;
 use xotpad::x25::{
     X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Facility,
-    X25Modulo, X25Packet,
+    X25Modulo, X25Packet, X25ResetRequest,
 };
 use xotpad::xot::{self, XotLink};
 
@@ -39,7 +39,7 @@ impl From<&X25Params> for Vec<X25Facility> {
 }
 
 // TODO: can we make this consume the inncombin params?
-fn negotiate(call_accept: &X25CallAccept, params: &X25Params) -> X25Params {
+fn negotiate_calling_params(call_accept: &X25CallAccept, params: &X25Params) -> X25Params {
     let params = params.clone();
 
     X25Params {
@@ -54,26 +54,10 @@ trait Vc {
 
     fn recv(&self) -> io::Result<(Bytes, bool)>;
 
-    //fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()>;
+    fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()>;
 }
 
-/*
-impl Svc {
-    pub fn call(...) -> io::Result<Self>
-
-    pub fn listen(link: XotLink, params: &X25Params) -> io::Result<SvcIncomingCall>
-}
-
-struct SvcIncomingCall(X25CallRequest);
-
-impl SvcIncomingCall {
-    pub fn accept(self) -> Svc
-
-    pub fn clear(self, cause: u8, diagnostic_code: u8)
-}
-*/
-
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum VcState {
     Ready,
     WaitCallAccept(Instant),
@@ -121,20 +105,12 @@ impl Svc {
         Ok(svc)
     }
 
+    pub fn listen(link: XotLink, params: &X25Params) -> io::Result<SvcIncomingCall> {
+        todo!()
+    }
+
     pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
         self.0.clear(cause, diagnostic_code)
-    }
-
-    pub fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
-        self.0.send(user_data, qualifier)
-    }
-
-    pub fn recv(&self) -> io::Result<(Bytes, bool)> {
-        self.0.recv()
-    }
-
-    pub fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
-        self.0.reset(cause, diagnostic_code)
     }
 
     fn new(link: XotLink, channel: u16, params: &X25Params) -> Self {
@@ -157,9 +133,39 @@ impl Svc {
     }
 }
 
+struct SvcIncomingCall(Svc, X25CallRequest);
+
+impl SvcIncomingCall {
+    pub fn request(&self) -> &X25CallRequest {
+        &self.1
+    }
+
+    pub fn accept(self) -> io::Result<Svc> {
+        todo!()
+    }
+
+    pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
+        todo!()
+    }
+}
+
+impl Vc for Svc {
+    fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
+        self.0.send(user_data, qualifier)
+    }
+
+    fn recv(&self) -> io::Result<(Bytes, bool)> {
+        self.0.recv()
+    }
+
+    fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
+        self.0.reset(cause, diagnostic_code)
+    }
+}
+
 struct VcInner {
     send_link: Arc<Mutex<XotLink>>, // does this really need to have a lock?
-    engine_recv: Arc<Condvar>,
+    engine_wait: Arc<Condvar>,
     channel: u16,
     state: Arc<(Mutex<VcState>, Condvar)>,
     params: Arc<RwLock<X25Params>>,
@@ -173,7 +179,7 @@ impl VcInner {
 
         VcInner {
             send_link: Arc::new(Mutex::new(send_link)),
-            engine_recv: Arc::new(Condvar::new()),
+            engine_wait: Arc::new(Condvar::new()),
             channel,
             state: Arc::new((Mutex::new(state), Condvar::new())),
             params: Arc::new(RwLock::new(params.clone())),
@@ -191,7 +197,7 @@ impl VcInner {
 
         thread::spawn({
             let recv_queue = Arc::clone(&recv_queue);
-            let engine_recv = Arc::clone(&self.engine_recv);
+            let engine_wait = Arc::clone(&self.engine_wait);
 
             move || {
                 loop {
@@ -200,7 +206,7 @@ impl VcInner {
                     let is_err = packet.is_err();
 
                     recv_queue.lock().unwrap().push_back(packet);
-                    engine_recv.notify_all();
+                    engine_wait.notify_all();
 
                     if is_err {
                         break;
@@ -263,7 +269,7 @@ impl VcInner {
                                 let mut params = self.params.write().unwrap();
 
                                 // TODO: can negotiation "fail"?
-                                *params = negotiate(&call_accept, &params);
+                                *params = negotiate_calling_params(&call_accept, &params);
 
                                 self.change_state(
                                     &mut state,
@@ -366,7 +372,7 @@ impl VcInner {
                 }
             }
 
-            (recv_queue, _) = self.engine_recv.wait_timeout(recv_queue, timeout).unwrap();
+            (recv_queue, _) = self.engine_wait.wait_timeout(recv_queue, timeout).unwrap();
         }
 
         println!("VC engine done!");
@@ -522,18 +528,18 @@ impl VcInner {
         &self,
         state: &mut VcState,
         new_state: VcState,
-        wake_engine_recv: bool,
-        wake_user_recv: bool,
+        wake_engine: bool,
+        wake_recv: bool,
     ) {
         *state = new_state;
 
         self.state.1.notify_all();
 
-        if wake_engine_recv {
-            self.engine_recv.notify_all();
+        if wake_engine {
+            self.engine_wait.notify_all();
         }
 
-        if wake_user_recv {
+        if wake_recv {
             self.recv_data_queue.1.notify_all();
         }
     }
@@ -610,6 +616,16 @@ fn send_clear_confirm(
     Ok(clear_confirm)
 }
 
+fn send_reset_request(
+    link: &mut XotLink,
+    channel: u16,
+    cause: u8,
+    diagnostic_code: u8,
+    params: &X25Params,
+) -> io::Result<X25ResetRequest> {
+    todo!()
+}
+
 fn send_packet(link: &mut XotLink, packet: &X25Packet) -> io::Result<()> {
     let mut buf = BytesMut::new();
 
@@ -628,6 +644,10 @@ fn split_xot_link(link: XotLink) -> (XotLink, XotLink) {
     )
 }
 
+fn should_accept_call(call_request: &X25CallRequest) -> bool {
+    false
+}
+
 fn main() -> io::Result<()> {
     let x25_params = X25Params {
         addr: X121Addr::from_str("73720201").unwrap(),
@@ -636,6 +656,28 @@ fn main() -> io::Result<()> {
         t23: Duration::from_secs(5),
     };
 
+    let tcp_listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT))?;
+
+    for tcp_stream in tcp_listener.incoming() {
+        let xot_link = XotLink::new(tcp_stream?);
+
+        let incoming_call = Svc::listen(xot_link, &x25_params)?;
+
+        if !should_accept_call(incoming_call.request()) {
+            incoming_call.clear(0, 0)?;
+            continue;
+        }
+
+        let svc = incoming_call.accept()?;
+
+        svc.send(Bytes::from_static(b"hi there!"), false)?;
+
+        thread::sleep(Duration::from_secs(5));
+
+        svc.clear(0, 0)?;
+    }
+
+    /*
     let tcp_stream = TcpStream::connect(("pac1", xot::TCP_PORT))?;
 
     let xot_link = XotLink::new(tcp_stream);
@@ -658,6 +700,7 @@ fn main() -> io::Result<()> {
     println!("all done!");
 
     thread::sleep(Duration::from_secs(2));
+    */
 
     Ok(())
 }
