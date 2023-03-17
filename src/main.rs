@@ -73,7 +73,7 @@ impl SvcIncomingCall {
 }
 */
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum VcState {
     Ready,
     WaitCallAccept(Instant),
@@ -86,7 +86,7 @@ enum VcState {
     OutOfOrder,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 struct DataTransferState {
     send_seq: u8,
     recv_seq: u8,
@@ -470,7 +470,34 @@ impl VcInner {
     }
 
     fn recv(&self) -> io::Result<(Bytes, bool)> {
-        todo!()
+        let mut queue = self.recv_data_queue.0.lock().unwrap();
+
+        loop {
+            // TODO: confirm this doesn't cause a deadlock...
+            // Clone the state, before we check if there is anything queued.
+            let state = (*self.state.0.lock().unwrap()).clone();
+
+            if let Some(data) = queue.pop_front() {
+                // TODO: this should "reconstruct" MORE packets...
+                return Ok((data.user_data, data.qualifier));
+            }
+
+            // There is no data...
+            match state {
+                VcState::DataTransfer(_) => queue = self.recv_data_queue.1.wait(queue).unwrap(),
+                VcState::Clear(clear) => {
+                    let (cause, diagnostic_code) = clear.unwrap_or((0, 0));
+
+                    let msg = format!("CLR {cause} - {diagnostic_code}");
+
+                    return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
+                }
+                VcState::OutOfOrder => {
+                    return Err(to_other_io_error("link is out of order".into()))
+                }
+                _ => panic!("unexpected state"),
+            }
+        }
     }
 
     fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
@@ -620,6 +647,10 @@ fn main() -> io::Result<()> {
 
     while let Ok((data, qualifier)) = svc.recv() {
         println!("{:?}", data);
+
+        if data.ends_with(b"Password: ") {
+            break;
+        }
     }
 
     svc.clear(0, 0)?;
