@@ -6,6 +6,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::x121::X121Addr;
 use crate::x25::facility::{decode_facilities, encode_facilities, X25Facility};
+use crate::x25::params::X25Modulo;
 
 /// Minimum X.25 packet length.
 pub const MIN_PACKET_LEN: usize = 3;
@@ -57,22 +58,6 @@ pub enum X25PacketType {
     // TODO: RestartRequest
     // TODO: RestartConfirm
     // TODO: Diagnostic
-}
-
-/// X.25 packet sequence numbering scheme.
-///
-/// The sequence numbering scheme specifies the range of sequence numbers, and
-/// in some cases the packet format as a result.
-///
-/// Only normal and extended schemes are currently supported, super extended is
-/// not supported.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum X25Modulo {
-    /// Numbers cycle through the entire range 0 to 7.
-    Normal = 8,
-
-    /// Numbers cycle through the entire range 0 to 127.
-    Extended = 128,
 }
 
 impl X25Packet {
