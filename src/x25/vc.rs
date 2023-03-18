@@ -3,6 +3,7 @@
 //! This module provides functionality for handling X.25 virtual circuits.
 
 use bytes::{Bytes, BytesMut};
+use either::Either;
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock};
@@ -54,7 +55,7 @@ pub trait Vc {
     fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 enum VcState {
     Ready,
     WaitCallAccept(Instant),
@@ -63,11 +64,12 @@ enum VcState {
     WaitClearConfirm(Instant),
 
     // These are our custom ones...
-    Clear(Option<(u8, u8)>),
+    Called(X25CallRequest),
+    Cleared(Either<X25ClearRequest, X25ClearConfirm>),
     OutOfOrder,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
 struct DataTransferState {
     send_seq: u8,
     recv_seq: u8,
@@ -277,14 +279,10 @@ impl VcInner {
                                     false,
                                 );
                             }
-                            Some(X25Packet::ClearRequest(X25ClearRequest {
-                                cause,
-                                diagnostic_code,
-                                ..
-                            })) => {
+                            Some(X25Packet::ClearRequest(clear_request)) => {
                                 self.change_state(
                                     &mut state,
-                                    VcState::Clear(Some((cause, diagnostic_code))),
+                                    VcState::Cleared(Either::Left(clear_request)),
                                     false,
                                     false,
                                 );
@@ -341,8 +339,13 @@ impl VcInner {
                         let t23 = self.params.read().unwrap().t23;
 
                         match packet {
-                            Some(X25Packet::ClearConfirm(_)) => {
-                                self.change_state(&mut state, VcState::Clear(None), false, false);
+                            Some(X25Packet::ClearConfirm(clear_confirm)) => {
+                                self.change_state(
+                                    &mut state,
+                                    VcState::Cleared(Either::Right(clear_confirm)),
+                                    false,
+                                    false,
+                                );
                             }
                             Some(X25Packet::ClearRequest(_)) => todo!(),
                             Some(_) => {
@@ -365,7 +368,10 @@ impl VcInner {
                             None => timeout = t23 - elapsed,
                         }
                     }
-                    VcState::Clear(_) | VcState::OutOfOrder => {
+                    VcState::Called(_) => {
+                        todo!();
+                    }
+                    VcState::Cleared(_) | VcState::OutOfOrder => {
                         panic!("unexpected state")
                     }
                 }
@@ -411,12 +417,23 @@ impl VcInner {
 
         match *state {
             VcState::DataTransfer(_) => Ok(()),
-            VcState::Clear(clear) => {
-                let (cause, diagnostic_code) = clear.unwrap_or((0, 0));
+            VcState::Cleared(Either::Left(ref clear_request)) => {
+                let X25ClearRequest {
+                    cause,
+                    diagnostic_code,
+                    ..
+                } = clear_request;
 
                 let msg = format!("CLR {cause} - {diagnostic_code}");
 
                 Err(io::Error::new(io::ErrorKind::ConnectionRefused, msg))
+            }
+            VcState::Cleared(Either::Right(_)) => {
+                // If we receive a clear confirm as a result of making a call,
+                // it should only be because we experienced a call request
+                // timeout - we did receive a clear confirm to our subsequent
+                // clear request... so we should consider it a timeout.
+                Err(io::Error::from(io::ErrorKind::TimedOut))
             }
             VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
             VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
@@ -460,7 +477,7 @@ impl VcInner {
         }
 
         match *state {
-            VcState::Clear(_) => {
+            VcState::Cleared(_) => {
                 self.change_state(&mut state, VcState::Ready, true, false);
 
                 Ok(())
@@ -479,29 +496,41 @@ impl VcInner {
 
         loop {
             // TODO: confirm this doesn't cause a deadlock...
-            // Clone the state, before we check if there is anything queued.
-            let state = (*self.state.0.lock().unwrap()).clone();
+            // trying this wihtout the need to clone the state...
+            {
+                let state = self.state.0.lock().unwrap();
 
-            if let Some(data) = queue.pop_front() {
-                // TODO: this should "reconstruct" MORE packets...
-                return Ok((data.user_data, data.qualifier));
+                if let Some(data) = queue.pop_front() {
+                    // TODO: this should "reconstruct" MORE packets...
+                    return Ok((data.user_data, data.qualifier));
+                }
+
+                // There is no data...
+                match *state {
+                    VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
+                    }
+                    VcState::Cleared(Either::Left(ref clear_request)) => {
+                        let X25ClearRequest {
+                            cause,
+                            diagnostic_code,
+                            ..
+                        } = clear_request;
+
+                        let msg = format!("CLR {cause} - {diagnostic_code}");
+
+                        return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
+                    }
+                    VcState::Cleared(Either::Right(_)) => {
+                        todo!("need to think about why this could happen")
+                    }
+                    VcState::OutOfOrder => {
+                        return Err(to_other_io_error("link is out of order".into()))
+                    }
+                    _ => panic!("unexpected state"),
+                }
             }
 
-            // There is no data...
-            match state {
-                VcState::DataTransfer(_) => queue = self.recv_data_queue.1.wait(queue).unwrap(),
-                VcState::Clear(clear) => {
-                    let (cause, diagnostic_code) = clear.unwrap_or((0, 0));
-
-                    let msg = format!("CLR {cause} - {diagnostic_code}");
-
-                    return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
-                }
-                VcState::OutOfOrder => {
-                    return Err(to_other_io_error("link is out of order".into()))
-                }
-                _ => panic!("unexpected state"),
-            }
+            queue = self.recv_data_queue.1.wait(queue).unwrap();
         }
     }
 
