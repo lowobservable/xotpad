@@ -14,7 +14,7 @@ use crate::x121::X121Addr;
 use crate::x25::facility::X25Facility;
 use crate::x25::packet::{
     X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Packet,
-    X25ResetRequest,
+    X25ResetConfirm, X25ResetRequest,
 };
 use crate::x25::params::{X25Modulo, X25Params};
 use crate::xot::XotLink;
@@ -71,7 +71,7 @@ enum VcState {
     Ready,
     WaitCallAccept(Instant),
     DataTransfer(DataTransferState),
-    //WaitResetConfirm,
+    WaitResetConfirm(Instant),
     WaitClearConfirm(Instant),
 
     // These are our custom ones...
@@ -395,6 +395,22 @@ impl VcInner {
 
                                 // send any queued packets, or respond with RR...
                             }
+                            Some(X25Packet::ResetRequest(_)) => {
+                                println!("RESET");
+
+                                let _ = send_reset_confirm(
+                                    &mut self.send_link.lock().unwrap(),
+                                    self.channel,
+                                    &self.params.read().unwrap(),
+                                );
+
+                                self.change_state(
+                                    &mut state,
+                                    VcState::DataTransfer(DataTransferState::default()),
+                                    false,
+                                    false,
+                                );
+                            }
                             Some(X25Packet::ClearRequest(clear_request)) => {
                                 let _ = send_clear_confirm(
                                     &mut self.send_link.lock().unwrap(),
@@ -415,7 +431,44 @@ impl VcInner {
                             None => {}
                         }
                     }
-                    //WaitResetConfirm,
+                    VcState::WaitResetConfirm(start_time) => {
+                        let elapsed = start_time.elapsed();
+                        let t22 = self.params.read().unwrap().t23;
+
+                        match packet {
+                            Some(X25Packet::ResetConfirm(_)) => {
+                                println!("RESET");
+
+                                self.change_state(
+                                    &mut state,
+                                    VcState::DataTransfer(DataTransferState::default()),
+                                    false,
+                                    false,
+                                );
+                            }
+                            Some(X25Packet::ClearRequest(clear_request)) => {
+                                let _ = send_clear_confirm(
+                                    &mut self.send_link.lock().unwrap(),
+                                    self.channel,
+                                    &self.params.read().unwrap(),
+                                );
+
+                                self.change_state(
+                                    &mut state,
+                                    VcState::Cleared(Either::Left(clear_request)),
+                                    false,
+                                    true,
+                                );
+                            }
+                            None if elapsed > t22 => {
+                                println!("T22 timeout");
+
+                                todo!("what does Cisco do?");
+                            }
+                            None => timeout = t22 - elapsed,
+                            Some(_) => { /* TODO: Ignore? */ }
+                        }
+                    }
                     VcState::WaitClearConfirm(start_time) => {
                         let elapsed = start_time.elapsed();
                         let t23 = self.params.read().unwrap().t23;
@@ -548,7 +601,7 @@ impl VcInner {
 
             if !matches!(
                 *state,
-                VcState::DataTransfer(_) /* | VcState::WaitResetConfirm*/
+                VcState::DataTransfer(_) | VcState::WaitResetConfirm(_)
             ) {
                 // TODO: what about if the state was cleared by the peer?
                 // is that an error... we don't get to clear with OUR cause...
@@ -580,6 +633,7 @@ impl VcInner {
 
         match *state {
             VcState::Cleared(_) => {
+                // TODO: We probably shouldn't do this... just leave it in Cleared
                 self.change_state(&mut state, VcState::Ready, true, false);
 
                 Ok(())
@@ -637,7 +691,52 @@ impl VcInner {
     }
 
     fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
-        todo!()
+        // Send the reset request packet.
+        {
+            let mut state = self.state.0.lock().unwrap();
+
+            if !matches!(*state, VcState::DataTransfer(_)) {
+                // TODO: what about if the state was cleared by the peer?
+                // is that an error... we don't get to clear with OUR cause...
+                todo!("invalid state");
+            }
+
+            send_reset_request(
+                &mut self.send_link.lock().unwrap(),
+                self.channel,
+                cause,
+                diagnostic_code,
+                &self.params.read().unwrap(),
+            )?;
+
+            self.change_state(
+                &mut state,
+                VcState::WaitResetConfirm(Instant::now()),
+                false,
+                false,
+            );
+        }
+
+        // Wait for the result.
+        let mut state = self.state.0.lock().unwrap();
+
+        while matches!(*state, VcState::WaitResetConfirm(_)) {
+            state = self.state.1.wait(state).unwrap();
+        }
+
+        match *state {
+            VcState::DataTransfer(_) => Ok(()),
+            VcState::Cleared(Either::Right(_)) => {
+                // If we receive a clear confirm as a result of reset,
+                // it should only be because we experienced a reset request
+                // timeout - we did receive a clear confirm to our subsequent
+                // clear request... so we should consider it a timeout.
+                Err(io::Error::from(io::ErrorKind::TimedOut))
+            }
+            VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
+            _ => panic!("unexpected state"),
+        }
     }
 
     // ...
@@ -755,7 +854,27 @@ fn send_reset_request(
     diagnostic_code: u8,
     params: &X25Params,
 ) -> io::Result<()> {
-    todo!()
+    let reset_request = X25ResetRequest {
+        modulo: params.modulo,
+        channel,
+        cause,
+        diagnostic_code,
+    };
+
+    send_packet(link, &reset_request.into())?;
+
+    Ok(())
+}
+
+fn send_reset_confirm(link: &mut XotLink, channel: u16, params: &X25Params) -> io::Result<()> {
+    let reset_confirm = X25ResetConfirm {
+        modulo: params.modulo,
+        channel,
+    };
+
+    send_packet(link, &reset_confirm.into())?;
+
+    Ok(())
 }
 
 fn send_packet(link: &mut XotLink, packet: &X25Packet) -> io::Result<()> {

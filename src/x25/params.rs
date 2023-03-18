@@ -34,6 +34,9 @@ pub struct X25Params {
     /// The _call request_ timeout.
     pub t21: Duration,
 
+    /// The _reset request_ timeout.
+    pub t22: Duration,
+
     /// The _clear request_ timeout.
     pub t23: Duration,
 }

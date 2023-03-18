@@ -17,6 +17,7 @@ fn main() -> io::Result<()> {
         addr: X121Addr::from_str("73720201").unwrap(),
         modulo: X25Modulo::Normal,
         t21: Duration::from_secs(5),
+        t22: Duration::from_secs(5),
         t23: Duration::from_secs(5),
     };
 
@@ -31,6 +32,10 @@ fn main() -> io::Result<()> {
         let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &x25_params)?;
 
         println!("CONNECTED!");
+
+        for _ in 0..10 {
+            svc.reset(0, 0)?;
+        }
 
         while let Ok((data, qualifier)) = svc.recv() {
             println!("{:?}", data);
@@ -64,8 +69,6 @@ fn main() -> io::Result<()> {
             let svc = incoming_call.accept()?;
 
             println!("ACCEPTED!");
-
-            // TODO: svc.send(Bytes::from_static(b"hi there!"), false)?;
 
             thread::sleep(Duration::from_secs(5));
 
