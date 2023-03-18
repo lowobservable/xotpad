@@ -176,7 +176,7 @@ impl X25Packet {
 }
 
 /// X.25 _call request_ packet.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct X25CallRequest {
     pub modulo: X25Modulo,
     pub channel: u16,

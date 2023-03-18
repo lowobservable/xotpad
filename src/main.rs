@@ -47,7 +47,11 @@ fn main() -> io::Result<()> {
         for tcp_stream in tcp_listener.incoming() {
             let xot_link = XotLink::new(tcp_stream?);
 
-            let incoming_call = Svc::listen(xot_link, &x25_params)?;
+            let incoming_call = Svc::listen(
+                xot_link,
+                1, /* this "channel" needs to be removed! */
+                &x25_params,
+            )?;
 
             if let Some((cause, diagnostic_code)) = should_accept_call(incoming_call.request()) {
                 incoming_call.clear(cause, diagnostic_code)?;
@@ -56,7 +60,7 @@ fn main() -> io::Result<()> {
 
             let svc = incoming_call.accept()?;
 
-            svc.send(Bytes::from_static(b"hi there!"), false)?;
+            // TODO: svc.send(Bytes::from_static(b"hi there!"), false)?;
 
             thread::sleep(Duration::from_secs(5));
 
@@ -70,5 +74,8 @@ fn main() -> io::Result<()> {
 }
 
 fn should_accept_call(call_request: &X25CallRequest) -> Option<(u8, u8)> {
-    Some((0, 0))
+    dbg!(call_request);
+
+    //Some((0x39, 0))
+    None
 }

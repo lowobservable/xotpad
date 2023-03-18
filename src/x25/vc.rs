@@ -35,13 +35,24 @@ impl From<&X25Params> for Vec<X25Facility> {
     }
 }
 
-// TODO: can we make this consume the inncombin params?
+// TODO: can we make this consume the inncombin params? No more clone?
 fn negotiate_calling_params(call_accept: &X25CallAccept, params: &X25Params) -> X25Params {
     let params = params.clone();
 
     X25Params {
         addr: params.addr.clone(),
         modulo: call_accept.modulo,
+        ..params
+    }
+}
+
+// TODO: can we make this consume the inncombin params? No more clone?
+fn negotiate_called_params(call_request: &X25CallRequest, params: &X25Params) -> X25Params {
+    let params = params.clone();
+
+    X25Params {
+        addr: params.addr.clone(),
+        modulo: call_request.modulo, // TODO: check Cisco behavior!
         ..params
     }
 }
@@ -105,8 +116,12 @@ impl Svc {
         Ok(svc)
     }
 
-    pub fn listen(link: XotLink, params: &X25Params) -> io::Result<SvcIncomingCall> {
-        todo!()
+    pub fn listen(link: XotLink, channel: u16, params: &X25Params) -> io::Result<SvcIncomingCall> {
+        let svc = Svc::new(link, channel, params);
+
+        let call_request = svc.0.listen()?;
+
+        Ok(SvcIncomingCall(svc, call_request))
     }
 
     pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
@@ -142,11 +157,41 @@ impl SvcIncomingCall {
     }
 
     pub fn accept(self) -> io::Result<Svc> {
-        todo!()
+        let svc = self.0;
+
+        {
+            let inner = &svc.0;
+
+            let mut state = inner.state.0.lock().unwrap();
+
+            let _ = send_call_accept(
+                &mut inner.send_link.lock().unwrap(),
+                inner.channel,
+                &inner.params.read().unwrap(),
+            )?;
+
+            *state = VcState::DataTransfer(DataTransferState::default());
+        }
+
+        Ok(svc)
     }
 
     pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
-        todo!()
+        let inner = self.0 .0;
+
+        // TODO: "okay this is a little different, we simply send the clear and go"
+        // it's NOT Svc.clear()!
+        // TODO: okay! this needs to change so that VcInner provides methods that
+        // don't do anything but CHANGE the state - they don't WAIT
+        let _ = send_clear_request(
+            &mut inner.send_link.lock().unwrap(),
+            inner.channel,
+            cause,
+            diagnostic_code,
+            &inner.params.read().unwrap(),
+        )?;
+
+        Ok(())
     }
 }
 
@@ -260,7 +305,24 @@ impl VcInner {
                 let mut state = self.state.0.lock().unwrap();
 
                 match *state {
-                    VcState::Ready => {}
+                    VcState::Ready => {
+                        match packet {
+                            Some(X25Packet::CallRequest(call_request)) => {
+                                let mut params = self.params.write().unwrap();
+
+                                // TODO: can negotiation "fail"?
+                                *params = negotiate_called_params(&call_request, &params);
+
+                                self.change_state(
+                                    &mut state,
+                                    VcState::Called(call_request),
+                                    false,
+                                    false,
+                                );
+                            }
+                            _ => { /* Ignore */ }
+                        }
+                    }
                     VcState::WaitCallAccept(start_time) => {
                         let elapsed = start_time.elapsed();
                         let t21 = self.params.read().unwrap().t21;
@@ -441,6 +503,20 @@ impl VcInner {
         }
     }
 
+    fn listen(&self) -> io::Result<X25CallRequest> {
+        let mut state = self.state.0.lock().unwrap();
+
+        while matches!(*state, VcState::Ready) {
+            state = self.state.1.wait(state).unwrap();
+        }
+
+        match *state {
+            VcState::Called(ref call_request) => Ok(call_request.clone()),
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
+            _ => panic!("unexpected state"),
+        }
+    }
+
     fn clear(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
         // Send the clear request packet.
         {
@@ -450,6 +526,8 @@ impl VcInner {
                 *state,
                 VcState::DataTransfer(_) /* | VcState::WaitResetConfirm*/
             ) {
+                // TODO: what about if the state was cleared by the peer?
+                // is that an error... we don't get to clear with OUR cause...
                 todo!("invalid state");
             }
 
@@ -595,6 +673,28 @@ fn send_call_request(
     let X25Packet::CallRequest(call_request) = packet else { unreachable!() };
 
     Ok(call_request)
+}
+
+fn send_call_accept(
+    link: &mut XotLink,
+    channel: u16,
+    params: &X25Params,
+) -> io::Result<X25CallAccept> {
+    let call_accept = X25CallAccept {
+        modulo: params.modulo,
+        channel,
+        called_addr: X121Addr::null(),
+        calling_addr: X121Addr::null(),
+        facilities: params.into(),
+        called_user_data: Bytes::new(),
+    };
+
+    // very hackky...
+    let packet = call_accept.into();
+    send_packet(link, &packet)?;
+    let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+
+    Ok(call_accept)
 }
 
 fn send_clear_request(

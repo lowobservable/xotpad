@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 
 /// An X.25 facility.
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum X25Facility {
     /// The maximum data field length of _data_ packets.
     PacketSize {
