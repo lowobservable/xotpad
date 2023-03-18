@@ -657,7 +657,7 @@ fn send_call_request(
     addr: &X121Addr,
     call_user_data: &Bytes,
     params: &X25Params,
-) -> io::Result<X25CallRequest> {
+) -> io::Result<()> {
     let call_request = X25CallRequest {
         modulo: params.modulo,
         channel,
@@ -667,19 +667,12 @@ fn send_call_request(
         call_user_data: call_user_data.clone(),
     };
 
-    // very hackky...
-    let packet = call_request.into();
-    send_packet(link, &packet)?;
-    let X25Packet::CallRequest(call_request) = packet else { unreachable!() };
+    send_packet(link, &call_request.into())?;
 
-    Ok(call_request)
+    Ok(())
 }
 
-fn send_call_accept(
-    link: &mut XotLink,
-    channel: u16,
-    params: &X25Params,
-) -> io::Result<X25CallAccept> {
+fn send_call_accept(link: &mut XotLink, channel: u16, params: &X25Params) -> io::Result<()> {
     let call_accept = X25CallAccept {
         modulo: params.modulo,
         channel,
@@ -689,12 +682,9 @@ fn send_call_accept(
         called_user_data: Bytes::new(),
     };
 
-    // very hackky...
-    let packet = call_accept.into();
-    send_packet(link, &packet)?;
-    let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+    send_packet(link, &call_accept.into())?;
 
-    Ok(call_accept)
+    Ok(())
 }
 
 fn send_clear_request(
@@ -703,7 +693,7 @@ fn send_clear_request(
     cause: u8,
     diagnostic_code: u8,
     params: &X25Params,
-) -> io::Result<X25ClearRequest> {
+) -> io::Result<()> {
     let clear_request = X25ClearRequest {
         modulo: params.modulo,
         channel,
@@ -715,19 +705,12 @@ fn send_clear_request(
         clear_user_data: Bytes::new(),
     };
 
-    // very hackky...
-    let packet = clear_request.into();
-    send_packet(link, &packet)?;
-    let X25Packet::ClearRequest(clear_request) = packet else { unreachable!() };
+    send_packet(link, &clear_request.into())?;
 
-    Ok(clear_request)
+    Ok(())
 }
 
-fn send_clear_confirm(
-    link: &mut XotLink,
-    channel: u16,
-    params: &X25Params,
-) -> io::Result<X25ClearConfirm> {
+fn send_clear_confirm(link: &mut XotLink, channel: u16, params: &X25Params) -> io::Result<()> {
     let clear_confirm = X25ClearConfirm {
         modulo: params.modulo,
         channel,
@@ -736,12 +719,9 @@ fn send_clear_confirm(
         facilities: Vec::new(),
     };
 
-    // very hackky...
-    let packet = clear_confirm.into();
-    send_packet(link, &packet)?;
-    let X25Packet::ClearConfirm(clear_confirm) = packet else { unreachable!() };
+    send_packet(link, &clear_confirm.into())?;
 
-    Ok(clear_confirm)
+    Ok(())
 }
 
 fn send_reset_request(
@@ -750,7 +730,7 @@ fn send_reset_request(
     cause: u8,
     diagnostic_code: u8,
     params: &X25Params,
-) -> io::Result<X25ResetRequest> {
+) -> io::Result<()> {
     todo!()
 }
 
