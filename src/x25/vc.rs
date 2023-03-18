@@ -164,7 +164,7 @@ impl SvcIncomingCall {
 
             let mut state = inner.state.0.lock().unwrap();
 
-            let _ = send_call_accept(
+            send_call_accept(
                 &mut inner.send_link.lock().unwrap(),
                 inner.channel,
                 &inner.params.read().unwrap(),
@@ -183,13 +183,19 @@ impl SvcIncomingCall {
         // it's NOT Svc.clear()!
         // TODO: okay! this needs to change so that VcInner provides methods that
         // don't do anything but CHANGE the state - they don't WAIT
-        let _ = send_clear_request(
+        send_clear_request(
             &mut inner.send_link.lock().unwrap(),
             inner.channel,
             cause,
             diagnostic_code,
             &inner.params.read().unwrap(),
         )?;
+
+        // TODO: we are not expecting a response from this call request clear...
+        // we should probably move to "Cleared" or have a final state?
+        //
+        // We need to move to something like "Cleared" so that the engine can
+        // shut down, it would be nice if it were to shut down cleanly...
 
         Ok(())
     }
@@ -268,7 +274,7 @@ impl VcInner {
         let mut recv_queue = recv_queue.lock().unwrap();
 
         loop {
-            let mut timeout = Duration::from_secs(1); // TODO
+            let mut timeout = Duration::from_secs(100_000); // TODO
 
             let packet = recv_queue.pop_front();
 
@@ -389,6 +395,20 @@ impl VcInner {
 
                                 // send any queued packets, or respond with RR...
                             }
+                            Some(X25Packet::ClearRequest(clear_request)) => {
+                                let _ = send_clear_confirm(
+                                    &mut self.send_link.lock().unwrap(),
+                                    self.channel,
+                                    &self.params.read().unwrap(),
+                                );
+
+                                self.change_state(
+                                    &mut state,
+                                    VcState::Cleared(Either::Left(clear_request)),
+                                    false,
+                                    true,
+                                );
+                            }
                             Some(_) => {
                                 // TODO: ignore?
                             }
@@ -438,6 +458,10 @@ impl VcInner {
                     }
                 }
             }
+
+            // TODO: if we are in the Cleared or OutOfOrder state we should try
+            // and exit this thread and also terminate the recv thread... that
+            // way we can shutdown cleanly?
 
             (recv_queue, _) = self.engine_wait.wait_timeout(recv_queue, timeout).unwrap();
         }

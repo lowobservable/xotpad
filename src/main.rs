@@ -30,15 +30,18 @@ fn main() -> io::Result<()> {
 
         let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &x25_params)?;
 
+        println!("CONNECTED!");
+
         while let Ok((data, qualifier)) = svc.recv() {
             println!("{:?}", data);
-
-            if data.ends_with(b"Password: ") {
-                break;
-            }
         }
 
-        svc.clear(0, 0)?;
+        // recv() will have returned an error when the link was cleared, we
+        // cannot clear here...
+        //
+        // how should recv() do this, how can the "user" get at the clear
+        // cause and diagnostic code?
+        //svc.clear(0, 0)?;
 
         println!("all done!");
     } else if args[1] == "listen" {
@@ -60,9 +63,13 @@ fn main() -> io::Result<()> {
 
             let svc = incoming_call.accept()?;
 
+            println!("ACCEPTED!");
+
             // TODO: svc.send(Bytes::from_static(b"hi there!"), false)?;
 
             thread::sleep(Duration::from_secs(5));
+
+            println!("CLEARING...");
 
             svc.clear(0, 0)?;
         }
