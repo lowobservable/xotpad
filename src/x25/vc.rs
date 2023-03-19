@@ -76,7 +76,7 @@ enum VcState {
 
     // These are our custom ones...
     Called(X25CallRequest),
-    Cleared(Either<X25ClearRequest, X25ClearConfirm>),
+    Cleared(Option<Either<X25ClearRequest, X25ClearConfirm>>),
     OutOfOrder,
 }
 
@@ -153,13 +153,16 @@ impl SvcIncomingCall {
 
             let mut state = inner.state.0.lock().unwrap();
 
-            send_call_accept(
-                &mut inner.send_link.lock().unwrap(),
-                inner.channel,
-                &inner.params.read().unwrap(),
-            )?;
+            // TODO: we should check state here, it may have changed...
 
-            inner.data_transfer(&mut state);
+            let call_accept = create_call_accept(inner.channel, &inner.params.read().unwrap());
+
+            if let Err(err) = inner.send_packet(&call_accept.into()) {
+                inner.out_of_order(&mut state, err);
+                return Err(to_other_io_error("todo!"));
+            } else {
+                inner.data_transfer(&mut state);
+            }
         }
 
         Ok(svc)
@@ -168,17 +171,27 @@ impl SvcIncomingCall {
     pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
         let inner = self.0 .0;
 
-        // TODO: "okay this is a little different, we simply send the clear and go"
-        // it's NOT Svc.clear()!
-        // TODO: okay! this needs to change so that VcInner provides methods that
-        // don't do anything but CHANGE the state - they don't WAIT
-        inner.send_clear_request(&mut inner.state.0.lock().unwrap(), cause, diagnostic_code);
+        let mut state = inner.state.0.lock().unwrap();
 
-        // TODO: we are not expecting a response from this call request clear...
-        // we should probably move to "Cleared" or have a final state?
-        //
-        // We need to move to something like "Cleared" so that the engine can
-        // shut down, it would be nice if it were to shut down cleanly...
+        // TODO: we should check state here, it may have changed...
+
+        let clear_request = X25ClearRequest {
+            modulo: inner.params.read().unwrap().modulo,
+            channel: inner.channel,
+            cause,
+            diagnostic_code,
+            called_addr: X121Addr::null(),
+            calling_addr: X121Addr::null(),
+            facilities: Vec::new(),
+            clear_user_data: Bytes::new(),
+        };
+
+        if let Err(err) = inner.send_packet(&clear_request.into()) {
+            inner.out_of_order(&mut state, err);
+            return Err(to_other_io_error("todo!"));
+        } else {
+            inner.cleared(&mut state, None);
+        }
 
         Ok(())
     }
@@ -266,10 +279,10 @@ impl VcInner {
             // Handle a XOT link error, otherwise pass along the packet.
             let packet = match packet.transpose() {
                 Ok(packet) => packet,
-                Err(_) => {
+                Err(err) => {
                     let mut state = self.state.0.lock().unwrap();
 
-                    self.out_of_order(&mut state);
+                    self.out_of_order(&mut state, err);
                     break;
                 }
             };
@@ -325,12 +338,7 @@ impl VcInner {
                                 self.data_transfer(&mut state);
                             }
                             Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.change_state(
-                                    &mut state,
-                                    VcState::Cleared(Either::Left(clear_request)),
-                                    false,
-                                    false,
-                                );
+                                self.cleared(&mut state, Some(Either::Left(clear_request)));
                             }
                             Some(_) => { /* TODO: Ignore? */ }
                             None if elapsed > t21 => {
@@ -395,12 +403,7 @@ impl VcInner {
 
                         match packet {
                             Some(X25Packet::ClearConfirm(clear_confirm)) => {
-                                self.change_state(
-                                    &mut state,
-                                    VcState::Cleared(Either::Right(clear_confirm)),
-                                    false,
-                                    false,
-                                );
+                                self.cleared(&mut state, Some(Either::Right(clear_confirm)));
                             }
                             Some(X25Packet::ClearRequest(_)) => todo!(),
                             Some(_) => { /* TODO: Ignore? */ }
@@ -413,8 +416,9 @@ impl VcInner {
                                 // retries of THIS state).
                                 //
                                 // what does it do for a user initiated clear?
+                                let err = io::Error::from(io::ErrorKind::TimedOut);
 
-                                self.out_of_order(&mut state);
+                                self.out_of_order(&mut state, err);
                                 break;
                             }
                             None => timeout = t23 - elapsed,
@@ -448,20 +452,21 @@ impl VcInner {
                 todo!("invalid state");
             }
 
-            send_call_request(
-                &mut self.send_link.lock().unwrap(),
+            let call_request = create_call_request(
                 self.channel,
                 addr,
                 call_user_data,
                 &self.params.read().unwrap(),
-            )?;
-
-            self.change_state(
-                &mut state,
-                VcState::WaitCallAccept(Instant::now()),
-                true,
-                false,
             );
+
+            if let Err(err) = self.send_packet(&call_request.into()) {
+                self.out_of_order(&mut state, err);
+                return Err(to_other_io_error("todo!"));
+            } else {
+                let next_state = VcState::WaitCallAccept(Instant::now());
+
+                self.change_state(&mut state, next_state, true, false);
+            }
         }
 
         // Wait for the result.
@@ -473,7 +478,7 @@ impl VcInner {
 
         match *state {
             VcState::DataTransfer(_) => Ok(()),
-            VcState::Cleared(Either::Left(ref clear_request)) => {
+            VcState::Cleared(Some(Either::Left(ref clear_request))) => {
                 let X25ClearRequest {
                     cause,
                     diagnostic_code,
@@ -484,7 +489,7 @@ impl VcInner {
 
                 Err(io::Error::new(io::ErrorKind::ConnectionRefused, msg))
             }
-            VcState::Cleared(Either::Right(_)) => {
+            VcState::Cleared(Some(Either::Right(_))) => {
                 // If we receive a clear confirm as a result of making a call,
                 // it should only be because we experienced a call request
                 // timeout - we did receive a clear confirm to our subsequent
@@ -492,7 +497,7 @@ impl VcInner {
                 Err(io::Error::from(io::ErrorKind::TimedOut))
             }
             VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
             _ => panic!("unexpected state"),
         }
     }
@@ -506,7 +511,7 @@ impl VcInner {
 
         match *state {
             VcState::Called(ref call_request) => Ok(call_request.clone()),
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
             _ => panic!("unexpected state"),
         }
     }
@@ -542,7 +547,7 @@ impl VcInner {
 
                 Ok(())
             }
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
             _ => panic!("unexpected state"),
         }
     }
@@ -569,7 +574,7 @@ impl VcInner {
                 match *state {
                     VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
                     }
-                    VcState::Cleared(Either::Left(ref clear_request)) => {
+                    VcState::Cleared(Some(Either::Left(ref clear_request))) => {
                         let X25ClearRequest {
                             cause,
                             diagnostic_code,
@@ -580,12 +585,10 @@ impl VcInner {
 
                         return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
                     }
-                    VcState::Cleared(Either::Right(_)) => {
+                    VcState::Cleared(Some(Either::Right(_))) => {
                         todo!("need to think about why this could happen")
                     }
-                    VcState::OutOfOrder => {
-                        return Err(to_other_io_error("link is out of order".into()))
-                    }
+                    VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
                     _ => panic!("unexpected state"),
                 }
             }
@@ -617,7 +620,7 @@ impl VcInner {
 
         match *state {
             VcState::DataTransfer(_) => Ok(()),
-            VcState::Cleared(Either::Right(_)) => {
+            VcState::Cleared(Some(Either::Right(_))) => {
                 // If we receive a clear confirm as a result of reset,
                 // it should only be because we experienced a reset request
                 // timeout - we did receive a clear confirm to our subsequent
@@ -625,7 +628,7 @@ impl VcInner {
                 Err(io::Error::from(io::ErrorKind::TimedOut))
             }
             VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order".into())),
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
             _ => panic!("unexpected state"),
         }
     }
@@ -642,8 +645,18 @@ impl VcInner {
         self.change_state(state, next_state, false, false);
     }
 
-    fn out_of_order(&self, state: &mut VcState) {
+    fn out_of_order(&self, state: &mut VcState, err: io::Error) {
         let next_state = VcState::OutOfOrder;
+
+        self.change_state(state, next_state, false, true);
+    }
+
+    fn cleared(
+        &self,
+        state: &mut VcState,
+        initiator: Option<Either<X25ClearRequest, X25ClearConfirm>>,
+    ) {
+        let next_state = VcState::Cleared(initiator);
 
         self.change_state(state, next_state, false, true);
     }
@@ -660,12 +673,13 @@ impl VcInner {
             clear_user_data: Bytes::new(),
         };
 
-        // TODO: this should put the link into "out of order" on send failure...
-        let _ = send_packet(&mut self.send_link.lock().unwrap(), &clear_request.into());
+        if let Err(err) = self.send_packet(&clear_request.into()) {
+            self.out_of_order(state, err);
+        } else {
+            let next_state = VcState::WaitClearConfirm(Instant::now());
 
-        let next_state = VcState::WaitClearConfirm(Instant::now());
-
-        self.change_state(state, next_state, false, false);
+            self.change_state(state, next_state, false, false);
+        }
     }
 
     fn send_clear_confirm(&self, clear_request: X25ClearRequest, state: &mut VcState) {
@@ -677,12 +691,11 @@ impl VcInner {
             facilities: Vec::new(),
         };
 
-        // TODO: this should put the link into "out of order" on send failure...
-        let _ = send_packet(&mut self.send_link.lock().unwrap(), &clear_confirm.into());
-
-        let next_state = VcState::Cleared(Either::Left(clear_request));
-
-        self.change_state(state, next_state, false, true);
+        if let Err(err) = self.send_packet(&clear_confirm.into()) {
+            self.out_of_order(state, err);
+        } else {
+            self.cleared(state, Some(Either::Left(clear_request)));
+        }
     }
 
     fn send_reset_request(&self, state: &mut VcState, cause: u8, diagnostic_code: u8) {
@@ -693,12 +706,13 @@ impl VcInner {
             diagnostic_code,
         };
 
-        // TODO: this should put the link into "out of order" on send failure...
-        let _ = send_packet(&mut self.send_link.lock().unwrap(), &reset_request.into());
+        if let Err(err) = self.send_packet(&reset_request.into()) {
+            self.out_of_order(state, err);
+        } else {
+            let next_state = VcState::WaitResetConfirm(Instant::now());
 
-        let next_state = VcState::WaitResetConfirm(Instant::now());
-
-        self.change_state(state, next_state, false, false);
+            self.change_state(state, next_state, false, false);
+        }
     }
 
     fn send_reset_confirm(&self, state: &mut VcState) {
@@ -707,10 +721,11 @@ impl VcInner {
             channel: self.channel,
         };
 
-        // TODO: this should put the link into "out of order" on send failure...
-        let _ = send_packet(&mut self.send_link.lock().unwrap(), &reset_confirm.into());
-
-        self.data_transfer(state);
+        if let Err(err) = self.send_packet(&reset_confirm.into()) {
+            self.out_of_order(state, err);
+        } else {
+            self.data_transfer(state);
+        }
     }
 
     fn change_state(
@@ -744,50 +759,41 @@ impl VcInner {
         queue.push_back(data);
         self.recv_data_queue.1.notify_all();
     }
+
+    fn send_packet(&self, packet: &X25Packet) -> io::Result<()> {
+        let mut buf = BytesMut::new();
+
+        packet.encode(&mut buf).map_err(|e| to_other_io_error(&e))?;
+
+        self.send_link.lock().unwrap().send(&buf)
+    }
 }
 
-fn send_call_request(
-    link: &mut XotLink,
+fn create_call_request(
     channel: u16,
     addr: &X121Addr,
     call_user_data: &Bytes,
     params: &X25Params,
-) -> io::Result<()> {
-    let call_request = X25CallRequest {
+) -> X25CallRequest {
+    X25CallRequest {
         modulo: params.modulo,
         channel,
         called_addr: addr.clone(),
         calling_addr: params.addr.clone(),
         facilities: params.into(),
         call_user_data: call_user_data.clone(),
-    };
-
-    send_packet(link, &call_request.into())?;
-
-    Ok(())
+    }
 }
 
-fn send_call_accept(link: &mut XotLink, channel: u16, params: &X25Params) -> io::Result<()> {
-    let call_accept = X25CallAccept {
+fn create_call_accept(channel: u16, params: &X25Params) -> X25CallAccept {
+    X25CallAccept {
         modulo: params.modulo,
         channel,
         called_addr: X121Addr::null(),
         calling_addr: X121Addr::null(),
         facilities: params.into(),
         called_user_data: Bytes::new(),
-    };
-
-    send_packet(link, &call_accept.into())?;
-
-    Ok(())
-}
-
-fn send_packet(link: &mut XotLink, packet: &X25Packet) -> io::Result<()> {
-    let mut buf = BytesMut::new();
-
-    packet.encode(&mut buf).map_err(to_other_io_error)?;
-
-    link.send(&buf)
+    }
 }
 
 fn split_xot_link(link: XotLink) -> (XotLink, XotLink) {
@@ -804,7 +810,8 @@ fn next_seq(seq: u8, modulo: X25Modulo) -> u8 {
     (seq + 1) % (modulo as u8)
 }
 
-fn to_other_io_error(e: String) -> io::Error {
+fn to_other_io_error(e: &str) -> io::Error {
+    let msg: String = e.into();
     //io::Error::other(e)
-    io::Error::new(io::ErrorKind::Other, e)
+    io::Error::new(io::ErrorKind::Other, msg)
 }
