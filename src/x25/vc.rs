@@ -393,11 +393,12 @@ impl VcInner {
                         panic!("unexpected state")
                     }
                 }
-            }
 
-            // TODO: if we are in the Cleared or OutOfOrder state we should try
-            // and exit this thread and also terminate the recv thread... that
-            // way we can shutdown cleanly?
+                // Exit loop if we are in a terminal state.
+                if matches!(*state, VcState::Cleared(_) | VcState::OutOfOrder) {
+                    break;
+                }
+            }
 
             (recv_queue, _) = self.engine_wait.wait_timeout(recv_queue, timeout).unwrap();
         }
