@@ -13,23 +13,17 @@ use xotpad::xot::{self, XotLink};
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
 
-    let x25_params = X25Params {
-        addr: X121Addr::from_str("73720201").unwrap(),
-        modulo: X25Modulo::Normal,
-        t21: Duration::from_secs(5),
-        t22: Duration::from_secs(5),
-        t23: Duration::from_secs(5),
-    };
+    let config = load_config();
 
     if args[1] == "call" {
-        let tcp_stream = TcpStream::connect(("localhost", xot::TCP_PORT))?;
+        let tcp_stream = TcpStream::connect((config.xot_gateway, xot::TCP_PORT))?;
 
         let xot_link = XotLink::new(tcp_stream);
 
         let addr = X121Addr::from_str("737101").unwrap();
         let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
-        let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &x25_params)?;
+        let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &config.x25_params)?;
 
         println!("CONNECTED!");
 
@@ -58,7 +52,7 @@ fn main() -> io::Result<()> {
             let incoming_call = Svc::listen(
                 xot_link,
                 1, /* this "channel" needs to be removed! */
-                &x25_params,
+                &config.x25_params,
             )?;
 
             if let Some((cause, diagnostic_code)) = should_accept_call(incoming_call.request()) {
@@ -88,4 +82,26 @@ fn should_accept_call(call_request: &X25CallRequest) -> Option<(u8, u8)> {
 
     //Some((0x39, 0))
     None
+}
+
+struct Config {
+    x25_params: X25Params,
+    xot_gateway: String,
+}
+
+fn load_config() -> Config {
+    let x25_params = X25Params {
+        addr: X121Addr::from_str("73720201").unwrap(),
+        modulo: X25Modulo::Normal,
+        t21: Duration::from_secs(5),
+        t22: Duration::from_secs(5),
+        t23: Duration::from_secs(5),
+    };
+
+    let xot_gateway = "localhost".into();
+
+    Config {
+        x25_params,
+        xot_gateway,
+    }
 }
