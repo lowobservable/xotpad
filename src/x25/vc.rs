@@ -87,17 +87,6 @@ struct DataTransferState {
     // ...
 }
 
-#[allow(clippy::derivable_impls)]
-impl Default for DataTransferState {
-    fn default() -> Self {
-        DataTransferState {
-            send_seq: 0,
-            recv_seq: 0,
-            // ...
-        }
-    }
-}
-
 /// X.25 _switched_ virtual circuit, or _virtual call_.
 pub struct Svc(Arc<VcInner>);
 
@@ -170,7 +159,7 @@ impl SvcIncomingCall {
                 &inner.params.read().unwrap(),
             )?;
 
-            *state = VcState::DataTransfer(DataTransferState::default());
+            inner.data_transfer(&mut state);
         }
 
         Ok(svc)
@@ -280,8 +269,7 @@ impl VcInner {
                 Err(_) => {
                     let mut state = self.state.0.lock().unwrap();
 
-                    self.change_state(&mut state, VcState::OutOfOrder, false, true);
-
+                    self.out_of_order(&mut state);
                     break;
                 }
             };
@@ -334,12 +322,7 @@ impl VcInner {
                                 // TODO: can negotiation "fail"?
                                 *params = negotiate_calling_params(&call_accept, &params);
 
-                                self.change_state(
-                                    &mut state,
-                                    VcState::DataTransfer(DataTransferState::default()),
-                                    false,
-                                    false,
-                                );
+                                self.data_transfer(&mut state);
                             }
                             Some(X25Packet::ClearRequest(clear_request)) => {
                                 self.change_state(
@@ -392,12 +375,7 @@ impl VcInner {
                             Some(X25Packet::ResetConfirm(_)) => {
                                 println!("RESET");
 
-                                self.change_state(
-                                    &mut state,
-                                    VcState::DataTransfer(DataTransferState::default()),
-                                    false,
-                                    false,
-                                );
+                                self.data_transfer(&mut state);
                             }
                             Some(X25Packet::ClearRequest(clear_request)) => {
                                 self.send_clear_confirm(clear_request, &mut state);
@@ -436,8 +414,7 @@ impl VcInner {
                                 //
                                 // what does it do for a user initiated clear?
 
-                                self.change_state(&mut state, VcState::OutOfOrder, false, false);
-
+                                self.out_of_order(&mut state);
                                 break;
                             }
                             None => timeout = t23 - elapsed,
@@ -655,6 +632,22 @@ impl VcInner {
 
     // ...
 
+    fn data_transfer(&self, state: &mut VcState) {
+        let next_state = VcState::DataTransfer(DataTransferState {
+            send_seq: 0,
+            recv_seq: 0,
+            // ...
+        });
+
+        self.change_state(state, next_state, false, false);
+    }
+
+    fn out_of_order(&self, state: &mut VcState) {
+        let next_state = VcState::OutOfOrder;
+
+        self.change_state(state, next_state, false, true);
+    }
+
     fn send_clear_request(&self, state: &mut VcState, cause: u8, diagnostic_code: u8) {
         let clear_request = X25ClearRequest {
             modulo: self.params.read().unwrap().modulo,
@@ -717,9 +710,7 @@ impl VcInner {
         // TODO: this should put the link into "out of order" on send failure...
         let _ = send_packet(&mut self.send_link.lock().unwrap(), &reset_confirm.into());
 
-        let next_state = VcState::DataTransfer(DataTransferState::default());
-
-        self.change_state(state, next_state, false, false);
+        self.data_transfer(state);
     }
 
     fn change_state(
