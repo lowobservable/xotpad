@@ -19,44 +19,6 @@ use crate::x25::packet::{
 use crate::x25::params::{X25Modulo, X25Params};
 use crate::xot::XotLink;
 
-// TODO: this may not be correct - it makes an assumption about the caller vs called?
-impl From<&X25Params> for Vec<X25Facility> {
-    fn from(params: &X25Params) -> Vec<X25Facility> {
-        vec![
-            X25Facility::PacketSize {
-                from_called: 128,  // TODO
-                from_calling: 128, // TODO
-            },
-            X25Facility::WindowSize {
-                from_called: 2,  // TODO
-                from_calling: 2, // TODO
-            },
-        ]
-    }
-}
-
-// TODO: can we make this consume the inncombin params? No more clone?
-fn negotiate_calling_params(call_accept: &X25CallAccept, params: &X25Params) -> X25Params {
-    let params = params.clone();
-
-    X25Params {
-        addr: params.addr.clone(),
-        modulo: call_accept.modulo,
-        ..params
-    }
-}
-
-// TODO: can we make this consume the inncombin params? No more clone?
-fn negotiate_called_params(call_request: &X25CallRequest, params: &X25Params) -> X25Params {
-    let params = params.clone();
-
-    X25Params {
-        addr: params.addr.clone(),
-        modulo: call_request.modulo, // TODO: check Cisco behavior!
-        ..params
-    }
-}
-
 /// X.25 virtual circuit.
 pub trait Vc {
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()>;
@@ -775,24 +737,68 @@ fn create_call_request(
     call_user_data: &Bytes,
     params: &X25Params,
 ) -> X25CallRequest {
+    let facilities = vec![
+        X25Facility::PacketSize {
+            from_called: 128,  // TODO
+            from_calling: 128, // TODO
+        },
+        X25Facility::WindowSize {
+            from_called: 2,  // TODO
+            from_calling: 2, // TODO
+        },
+    ];
+
     X25CallRequest {
         modulo: params.modulo,
         channel,
         called_addr: addr.clone(),
         calling_addr: params.addr.clone(),
-        facilities: params.into(),
+        facilities,
         call_user_data: call_user_data.clone(),
     }
 }
 
 fn create_call_accept(channel: u16, params: &X25Params) -> X25CallAccept {
+    let facilities = vec![
+        X25Facility::PacketSize {
+            from_called: 128,  // TODO
+            from_calling: 128, // TODO
+        },
+        X25Facility::WindowSize {
+            from_called: 2,  // TODO
+            from_calling: 2, // TODO
+        },
+    ];
+
     X25CallAccept {
         modulo: params.modulo,
         channel,
         called_addr: X121Addr::null(),
         calling_addr: X121Addr::null(),
-        facilities: params.into(),
+        facilities,
         called_user_data: Bytes::new(),
+    }
+}
+
+// TODO: can we make this consume the inncombin params? No more clone?
+fn negotiate_calling_params(call_accept: &X25CallAccept, params: &X25Params) -> X25Params {
+    let params = params.clone();
+
+    X25Params {
+        addr: params.addr.clone(),
+        modulo: call_accept.modulo,
+        ..params
+    }
+}
+
+// TODO: can we make this consume the inncombin params? No more clone?
+fn negotiate_called_params(call_request: &X25CallRequest, params: &X25Params) -> X25Params {
+    let params = params.clone();
+
+    X25Params {
+        addr: params.addr.clone(),
+        modulo: call_request.modulo, // TODO: check Cisco behavior!
+        ..params
     }
 }
 
