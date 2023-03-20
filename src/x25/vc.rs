@@ -62,7 +62,65 @@ impl Svc {
     ) -> io::Result<Self> {
         let svc = Svc::new(link, channel, params);
 
-        svc.0.call(addr, call_user_data)?;
+        {
+            let inner = &svc.0;
+
+            // Send the call request packet.
+            {
+                let mut state = inner.state.0.lock().unwrap();
+
+                if !matches!(*state, VcState::Ready) {
+                    todo!("invalid state");
+                }
+
+                let call_request = create_call_request(channel, addr, call_user_data, params);
+
+                if let Err(err) = inner.send_packet(&call_request.into()) {
+                    inner.out_of_order(&mut state, err);
+                    inner.engine_wait.notify_all();
+                    return Err(to_other_io_error("todo!"));
+                } else {
+                    let next_state = VcState::WaitCallAccept(Instant::now());
+
+                    inner.change_state(&mut state, next_state);
+                    inner.engine_wait.notify_all();
+                }
+            }
+
+            // Wait for the result.
+            let mut state = inner.state.0.lock().unwrap();
+
+            while matches!(*state, VcState::WaitCallAccept(_)) {
+                state = inner.state.1.wait(state).unwrap();
+            }
+
+            match *state {
+                VcState::DataTransfer(_) => { /* TODO: describe this! */ }
+                VcState::Cleared(Some(Either::Left(ref clear_request))) => {
+                    let X25ClearRequest {
+                        cause,
+                        diagnostic_code,
+                        ..
+                    } = clear_request;
+
+                    let msg = format!("CLR {cause} - {diagnostic_code}");
+
+                    return Err(io::Error::new(io::ErrorKind::ConnectionRefused, msg));
+                }
+                VcState::Cleared(Some(Either::Right(_))) => {
+                    // If we receive a clear confirm as a result of making a call,
+                    // it should only be because we experienced a call request
+                    // timeout - we did receive a clear confirm to our subsequent
+                    // clear request... so we should consider it a timeout.
+                    return Err(io::Error::from(io::ErrorKind::TimedOut));
+                }
+                VcState::WaitClearConfirm(_) => {
+                    return Err(io::Error::from(io::ErrorKind::TimedOut))
+                }
+                VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
+                _ => panic!("unexpected state"),
+            }
+        }
 
         Ok(svc)
     }
@@ -70,18 +128,64 @@ impl Svc {
     pub fn listen(link: XotLink, channel: u16, params: &X25Params) -> io::Result<SvcIncomingCall> {
         let svc = Svc::new(link, channel, params);
 
-        let call_request = svc.0.listen()?;
+        let call_request = {
+            let inner = &svc.0;
+
+            let mut state = inner.state.0.lock().unwrap();
+
+            while matches!(*state, VcState::Ready) {
+                state = inner.state.1.wait(state).unwrap();
+            }
+
+            match *state {
+                VcState::Called(ref call_request) => call_request.clone(),
+                VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
+                _ => panic!("unexpected state"),
+            }
+        };
 
         Ok(SvcIncomingCall(svc, call_request))
     }
 
     pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<XotLink> {
-        self.0.clear(cause, diagnostic_code)?;
+        let inner = self.0;
 
-        if let Ok(inner) = Arc::try_unwrap(self.0) {
+        {
+            // Send the clear request packet.
+            {
+                let mut state = inner.state.0.lock().unwrap();
+
+                if !matches!(
+                    *state,
+                    VcState::DataTransfer(_) | VcState::WaitResetConfirm(_)
+                ) {
+                    // TODO: what about if the state was cleared by the peer?
+                    // is that an error... we don't get to clear with OUR cause...
+                    todo!("invalid state");
+                }
+
+                inner.clear_request(&mut state, cause, diagnostic_code);
+                inner.engine_wait.notify_all();
+            }
+
+            // Wait for the result.
+            let mut state = inner.state.0.lock().unwrap();
+
+            while matches!(*state, VcState::WaitClearConfirm(_)) {
+                state = inner.state.1.wait(state).unwrap();
+            }
+
+            match *state {
+                VcState::Cleared(_) => {}
+                VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
+                _ => panic!("unexpected state"),
+            }
+        }
+
+        if let Ok(inner) = Arc::try_unwrap(inner) {
             Ok(inner.close())
         } else {
-            todo!("uuhh?")
+            panic!("uuuuhhhh");
         }
     }
 
@@ -173,15 +277,89 @@ impl SvcIncomingCall {
 
 impl Vc for Svc {
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
-        self.0.send(user_data, qualifier)
+        todo!()
     }
 
     fn recv(&self) -> io::Result<(Bytes, bool)> {
-        self.0.recv()
+        let inner = &self.0;
+
+        let mut queue = inner.recv_data_queue.0.lock().unwrap();
+
+        loop {
+            // TODO: confirm this doesn't cause a deadlock...
+            // trying this wihtout the need to clone the state...
+            {
+                let state = inner.state.0.lock().unwrap();
+
+                if let Some(data) = queue.pop_front() {
+                    // TODO: this should "reconstruct" MORE packets...
+                    return Ok((data.user_data, data.qualifier));
+                }
+
+                // There is no data...
+                match *state {
+                    VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
+                    }
+                    VcState::Cleared(Some(Either::Left(ref clear_request))) => {
+                        let X25ClearRequest {
+                            cause,
+                            diagnostic_code,
+                            ..
+                        } = clear_request;
+
+                        let msg = format!("CLR {cause} - {diagnostic_code}");
+
+                        return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
+                    }
+                    VcState::Cleared(Some(Either::Right(_))) => {
+                        todo!("need to think about why this could happen")
+                    }
+                    VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
+                    _ => panic!("unexpected state"),
+                }
+            }
+
+            queue = inner.recv_data_queue.1.wait(queue).unwrap();
+        }
     }
 
     fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
-        self.0.reset(cause, diagnostic_code)
+        let inner = &self.0;
+
+        // Send the reset request packet.
+        {
+            let mut state = inner.state.0.lock().unwrap();
+
+            if !matches!(*state, VcState::DataTransfer(_)) {
+                // TODO: what about if the state was cleared by the peer?
+                // is that an error... we don't get to clear with OUR cause...
+                todo!("invalid state");
+            }
+
+            inner.reset_request(&mut state, cause, diagnostic_code);
+            inner.engine_wait.notify_all();
+        }
+
+        // Wait for the result.
+        let mut state = inner.state.0.lock().unwrap();
+
+        while matches!(*state, VcState::WaitResetConfirm(_)) {
+            state = inner.state.1.wait(state).unwrap();
+        }
+
+        match *state {
+            VcState::DataTransfer(_) => Ok(()),
+            VcState::Cleared(Some(Either::Right(_))) => {
+                // If we receive a clear confirm as a result of reset,
+                // it should only be because we experienced a reset request
+                // timeout - we did receive a clear confirm to our subsequent
+                // clear request... so we should consider it a timeout.
+                Err(io::Error::from(io::ErrorKind::TimedOut))
+            }
+            VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
+            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
+            _ => panic!("unexpected state"),
+        }
     }
 }
 
@@ -429,197 +607,6 @@ impl VcInner {
 
         println!("VC engine done!");
     }
-
-    fn call(&self, addr: &X121Addr, call_user_data: &Bytes) -> io::Result<()> {
-        // Send the call request packet.
-        {
-            let mut state = self.state.0.lock().unwrap();
-
-            if !matches!(*state, VcState::Ready) {
-                todo!("invalid state");
-            }
-
-            let call_request = create_call_request(
-                self.channel,
-                addr,
-                call_user_data,
-                &self.params.read().unwrap(),
-            );
-
-            if let Err(err) = self.send_packet(&call_request.into()) {
-                self.out_of_order(&mut state, err);
-                self.engine_wait.notify_all();
-                return Err(to_other_io_error("todo!"));
-            } else {
-                let next_state = VcState::WaitCallAccept(Instant::now());
-
-                self.change_state(&mut state, next_state);
-                self.engine_wait.notify_all();
-            }
-        }
-
-        // Wait for the result.
-        let mut state = self.state.0.lock().unwrap();
-
-        while matches!(*state, VcState::WaitCallAccept(_)) {
-            state = self.state.1.wait(state).unwrap();
-        }
-
-        match *state {
-            VcState::DataTransfer(_) => Ok(()),
-            VcState::Cleared(Some(Either::Left(ref clear_request))) => {
-                let X25ClearRequest {
-                    cause,
-                    diagnostic_code,
-                    ..
-                } = clear_request;
-
-                let msg = format!("CLR {cause} - {diagnostic_code}");
-
-                Err(io::Error::new(io::ErrorKind::ConnectionRefused, msg))
-            }
-            VcState::Cleared(Some(Either::Right(_))) => {
-                // If we receive a clear confirm as a result of making a call,
-                // it should only be because we experienced a call request
-                // timeout - we did receive a clear confirm to our subsequent
-                // clear request... so we should consider it a timeout.
-                Err(io::Error::from(io::ErrorKind::TimedOut))
-            }
-            VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
-            _ => panic!("unexpected state"),
-        }
-    }
-
-    fn listen(&self) -> io::Result<X25CallRequest> {
-        let mut state = self.state.0.lock().unwrap();
-
-        while matches!(*state, VcState::Ready) {
-            state = self.state.1.wait(state).unwrap();
-        }
-
-        match *state {
-            VcState::Called(ref call_request) => Ok(call_request.clone()),
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
-            _ => panic!("unexpected state"),
-        }
-    }
-
-    fn clear(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
-        // Send the clear request packet.
-        {
-            let mut state = self.state.0.lock().unwrap();
-
-            if !matches!(
-                *state,
-                VcState::DataTransfer(_) | VcState::WaitResetConfirm(_)
-            ) {
-                // TODO: what about if the state was cleared by the peer?
-                // is that an error... we don't get to clear with OUR cause...
-                todo!("invalid state");
-            }
-
-            self.clear_request(&mut state, cause, diagnostic_code);
-            self.engine_wait.notify_all();
-        }
-
-        // Wait for the result.
-        let mut state = self.state.0.lock().unwrap();
-
-        while matches!(*state, VcState::WaitClearConfirm(_)) {
-            state = self.state.1.wait(state).unwrap();
-        }
-
-        match *state {
-            VcState::Cleared(_) => Ok(()),
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
-            _ => panic!("unexpected state"),
-        }
-    }
-
-    fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
-        todo!()
-    }
-
-    fn recv(&self) -> io::Result<(Bytes, bool)> {
-        let mut queue = self.recv_data_queue.0.lock().unwrap();
-
-        loop {
-            // TODO: confirm this doesn't cause a deadlock...
-            // trying this wihtout the need to clone the state...
-            {
-                let state = self.state.0.lock().unwrap();
-
-                if let Some(data) = queue.pop_front() {
-                    // TODO: this should "reconstruct" MORE packets...
-                    return Ok((data.user_data, data.qualifier));
-                }
-
-                // There is no data...
-                match *state {
-                    VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
-                    }
-                    VcState::Cleared(Some(Either::Left(ref clear_request))) => {
-                        let X25ClearRequest {
-                            cause,
-                            diagnostic_code,
-                            ..
-                        } = clear_request;
-
-                        let msg = format!("CLR {cause} - {diagnostic_code}");
-
-                        return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
-                    }
-                    VcState::Cleared(Some(Either::Right(_))) => {
-                        todo!("need to think about why this could happen")
-                    }
-                    VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
-                    _ => panic!("unexpected state"),
-                }
-            }
-
-            queue = self.recv_data_queue.1.wait(queue).unwrap();
-        }
-    }
-
-    fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
-        // Send the reset request packet.
-        {
-            let mut state = self.state.0.lock().unwrap();
-
-            if !matches!(*state, VcState::DataTransfer(_)) {
-                // TODO: what about if the state was cleared by the peer?
-                // is that an error... we don't get to clear with OUR cause...
-                todo!("invalid state");
-            }
-
-            self.reset_request(&mut state, cause, diagnostic_code);
-            self.engine_wait.notify_all();
-        }
-
-        // Wait for the result.
-        let mut state = self.state.0.lock().unwrap();
-
-        while matches!(*state, VcState::WaitResetConfirm(_)) {
-            state = self.state.1.wait(state).unwrap();
-        }
-
-        match *state {
-            VcState::DataTransfer(_) => Ok(()),
-            VcState::Cleared(Some(Either::Right(_))) => {
-                // If we receive a clear confirm as a result of reset,
-                // it should only be because we experienced a reset request
-                // timeout - we did receive a clear confirm to our subsequent
-                // clear request... so we should consider it a timeout.
-                Err(io::Error::from(io::ErrorKind::TimedOut))
-            }
-            VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
-            _ => panic!("unexpected state"),
-        }
-    }
-
-    // ...
 
     fn data_transfer(&self, state: &mut VcState) {
         let next_state = VcState::DataTransfer(DataTransferState {
