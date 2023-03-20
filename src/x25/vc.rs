@@ -552,7 +552,8 @@ impl VcInner {
                                 todo!("what does Cisco do?");
                             }
                             None => timeout = t22 - elapsed,
-                            Some(_) => { /* TODO: Ignore? */ }
+                            Some(pkt) => { /* TODO: Ignore? Or, do you think I need to send a reset request again!!! */
+                            }
                         }
                     }
                     VcState::WaitClearConfirm(start_time) => {
