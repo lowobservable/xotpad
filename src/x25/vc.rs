@@ -448,16 +448,13 @@ impl VcInner {
 
                 match *state {
                     VcState::Ready => {
-                        match packet {
-                            Some(X25Packet::CallRequest(call_request)) => {
-                                let mut params = self.params.write().unwrap();
+                        if let Some(X25Packet::CallRequest(call_request)) = packet {
+                            let mut params = self.params.write().unwrap();
 
-                                // TODO: can negotiation "fail"?
-                                *params = negotiate_called_params(&call_request, &params);
+                            // TODO: can negotiation "fail"?
+                            *params = negotiate_called_params(&call_request, &params);
 
-                                self.change_state(&mut state, VcState::Called(call_request));
-                            }
-                            _ => { /* TODO: Ignore */ }
+                            self.change_state(&mut state, VcState::Called(call_request));
                         }
                     }
                     VcState::WaitCallAccept(start_time) => {
@@ -536,7 +533,7 @@ impl VcInner {
                                 todo!("what does Cisco do?");
                             }
                             None => timeout = t22 - elapsed,
-                            Some(pkt) => { /* TODO: Ignore? Or, do you think I need to send a reset request again!!! */
+                            Some(_) => { /* TODO: Ignore? Or, do you think I need to send a reset request again!!! */
                             }
                         }
                     }
