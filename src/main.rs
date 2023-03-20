@@ -100,7 +100,7 @@ fn load_config() -> Config {
         t23: Duration::from_secs(5),
     };
 
-    let xot_gateway = "pac1".into();
+    let xot_gateway = "localhost".into();
 
     Config {
         x25_params,

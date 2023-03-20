@@ -107,15 +107,12 @@ impl Svc {
 
                     return Err(io::Error::new(io::ErrorKind::ConnectionRefused, msg));
                 }
-                VcState::Cleared(Some(Either::Right(_))) => {
+                VcState::WaitClearConfirm(_) | VcState::Cleared(Some(Either::Right(_))) => {
                     // If we receive a clear confirm as a result of making a call,
                     // it should only be because we experienced a call request
                     // timeout - we did receive a clear confirm to our subsequent
                     // clear request... so we should consider it a timeout.
                     return Err(io::Error::from(io::ErrorKind::TimedOut));
-                }
-                VcState::WaitClearConfirm(_) => {
-                    return Err(io::Error::from(io::ErrorKind::TimedOut))
                 }
                 VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
                 _ => panic!("unexpected state"),
@@ -349,14 +346,13 @@ impl Vc for Svc {
 
         match *state {
             VcState::DataTransfer(_) => Ok(()),
-            VcState::Cleared(Some(Either::Right(_))) => {
+            VcState::WaitClearConfirm(_) | VcState::Cleared(Some(Either::Right(_))) => {
                 // If we receive a clear confirm as a result of reset,
                 // it should only be because we experienced a reset request
                 // timeout - we did receive a clear confirm to our subsequent
                 // clear request... so we should consider it a timeout.
                 Err(io::Error::from(io::ErrorKind::TimedOut))
             }
-            VcState::WaitClearConfirm(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
             VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
             _ => panic!("unexpected state"),
         }
