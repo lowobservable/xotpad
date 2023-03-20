@@ -75,8 +75,14 @@ impl Svc {
         Ok(SvcIncomingCall(svc, call_request))
     }
 
-    pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
-        self.0.clear(cause, diagnostic_code)
+    pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<XotLink> {
+        self.0.clear(cause, diagnostic_code)?;
+
+        if let Ok(inner) = Arc::try_unwrap(self.0) {
+            Ok(inner.close())
+        } else {
+            todo!("uuhh?")
+        }
     }
 
     fn new(link: XotLink, channel: u16, params: &X25Params) -> Self {
@@ -195,6 +201,14 @@ impl VcInner {
             params: Arc::new(RwLock::new(params.clone())),
             send_data_queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
             recv_data_queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
+        }
+    }
+
+    fn close(self) -> XotLink {
+        if let Ok(link) = Arc::try_unwrap(self.send_link) {
+            link.into_inner().unwrap()
+        } else {
+            todo!("uuuhhh")
         }
     }
 
