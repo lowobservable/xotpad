@@ -256,7 +256,7 @@ impl VcInner {
 
             let packet = recv_queue.pop_front();
 
-            dbg!(&packet);
+            //dbg!(&packet);
 
             // Handle a XOT link error, otherwise pass along the packet.
             let packet = match packet.transpose() {
@@ -305,6 +305,8 @@ impl VcInner {
                     VcState::WaitCallAccept(start_time) => {
                         let elapsed = start_time.elapsed();
                         let X25Params { t21, t23, .. } = *self.params.read().unwrap();
+
+                        timeout = t21; // TODO: <- backup
 
                         match packet {
                             Some(X25Packet::CallAccept(call_accept)) => {
@@ -358,6 +360,8 @@ impl VcInner {
                         let elapsed = start_time.elapsed();
                         let t22 = self.params.read().unwrap().t23;
 
+                        timeout = t22; // TODO: backup!
+
                         match packet {
                             Some(X25Packet::ResetConfirm(_)) => {
                                 println!("RESET");
@@ -380,6 +384,8 @@ impl VcInner {
                     VcState::WaitClearConfirm(start_time) => {
                         let elapsed = start_time.elapsed();
                         let t23 = self.params.read().unwrap().t23;
+
+                        timeout = t23;
 
                         match packet {
                             Some(X25Packet::ClearConfirm(clear_confirm)) => {
