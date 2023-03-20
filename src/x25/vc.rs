@@ -97,15 +97,7 @@ impl Svc {
             match *state {
                 VcState::DataTransfer(_) => { /* TODO: describe this! */ }
                 VcState::Cleared(Some(Either::Left(ref clear_request))) => {
-                    let X25ClearRequest {
-                        cause,
-                        diagnostic_code,
-                        ..
-                    } = clear_request;
-
-                    let msg = format!("CLR {cause} - {diagnostic_code}");
-
-                    return Err(io::Error::new(io::ErrorKind::ConnectionRefused, msg));
+                    return Err(clear_request_to_error(clear_request));
                 }
                 VcState::WaitClearConfirm(_) | VcState::Cleared(Some(Either::Right(_))) => {
                     // If we receive a clear confirm as a result of making a call,
@@ -298,15 +290,7 @@ impl Vc for Svc {
                     VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
                     }
                     VcState::Cleared(Some(Either::Left(ref clear_request))) => {
-                        let X25ClearRequest {
-                            cause,
-                            diagnostic_code,
-                            ..
-                        } = clear_request;
-
-                        let msg = format!("CLR {cause} - {diagnostic_code}");
-
-                        return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
+                        return Err(clear_request_to_error(clear_request));
                     }
                     VcState::Cleared(Some(Either::Right(_))) => {
                         todo!("need to think about why this could happen")
@@ -813,4 +797,16 @@ fn to_other_io_error(e: &str) -> io::Error {
     let msg: String = e.into();
     //io::Error::other(e)
     io::Error::new(io::ErrorKind::Other, msg)
+}
+
+fn clear_request_to_error(clear_request: &X25ClearRequest) -> io::Error {
+    let X25ClearRequest {
+        cause,
+        diagnostic_code,
+        ..
+    } = clear_request;
+
+    let msg = format!("CLR {cause} - {diagnostic_code}");
+
+    io::Error::new(io::ErrorKind::ConnectionReset, msg)
 }
