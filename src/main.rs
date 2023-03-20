@@ -76,8 +76,6 @@ fn main() -> io::Result<()> {
         }
     }
 
-    thread::sleep(Duration::from_secs(5));
-
     Ok(())
 }
 
