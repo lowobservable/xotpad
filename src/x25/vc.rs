@@ -79,12 +79,12 @@ impl Svc {
                     inner.out_of_order(&mut state, err);
                     inner.engine_wait.notify_all();
                     return Err(to_other_io_error("todo!"));
-                } else {
-                    let next_state = VcState::WaitCallAccept(Instant::now());
-
-                    inner.change_state(&mut state, next_state);
-                    inner.engine_wait.notify_all();
                 }
+
+                let next_state = VcState::WaitCallAccept(Instant::now());
+
+                inner.change_state(&mut state, next_state);
+                inner.engine_wait.notify_all();
             }
 
             // Wait for the result.
@@ -223,10 +223,10 @@ impl SvcIncomingCall {
                 inner.engine_wait.notify_all();
 
                 return Err(to_other_io_error("todo!"));
-            } else {
-                inner.data_transfer(&mut state);
-                inner.engine_wait.notify_all();
             }
+
+            inner.data_transfer(&mut state);
+            inner.engine_wait.notify_all();
         }
 
         Ok(svc)
@@ -255,10 +255,10 @@ impl SvcIncomingCall {
             inner.engine_wait.notify_all();
 
             return Err(to_other_io_error("todo!"));
-        } else {
-            inner.cleared(&mut state, None);
-            inner.engine_wait.notify_all();
         }
+
+        inner.cleared(&mut state, None);
+        inner.engine_wait.notify_all();
 
         Ok(())
     }
