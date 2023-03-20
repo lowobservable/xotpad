@@ -100,7 +100,7 @@ fn load_config() -> Config {
         t23: Duration::from_secs(5),
     };
 
-    let xot_gateway = "localhost".into();
+    let xot_gateway = env::var("XOT_GATEWAY").unwrap_or("localhost".into());
 
     Config {
         x25_params,
