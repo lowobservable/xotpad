@@ -72,7 +72,7 @@ fn main() -> io::Result<()> {
 
             let tcp_stream = xot_link.into_stream();
 
-            tcp_stream.shutdown(Shutdown::Both);
+            let _ = tcp_stream.shutdown(Shutdown::Both);
         }
     }
 

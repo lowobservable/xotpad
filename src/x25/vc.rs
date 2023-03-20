@@ -127,9 +127,12 @@ impl SvcIncomingCall {
 
             if let Err(err) = inner.send_packet(&call_accept.into()) {
                 inner.out_of_order(&mut state, err);
+                inner.engine_wait.notify_all();
+
                 return Err(to_other_io_error("todo!"));
             } else {
                 inner.data_transfer(&mut state);
+                inner.engine_wait.notify_all();
             }
         }
 
@@ -156,9 +159,12 @@ impl SvcIncomingCall {
 
         if let Err(err) = inner.send_packet(&clear_request.into()) {
             inner.out_of_order(&mut state, err);
+            inner.engine_wait.notify_all();
+
             return Err(to_other_io_error("todo!"));
         } else {
             inner.cleared(&mut state, None);
+            inner.engine_wait.notify_all();
         }
 
         Ok(())
@@ -259,6 +265,7 @@ impl VcInner {
                     let mut state = self.state.0.lock().unwrap();
 
                     self.out_of_order(&mut state, err);
+                    self.recv_data_queue.1.notify_all();
                     break;
                 }
             };
@@ -290,12 +297,7 @@ impl VcInner {
                                 // TODO: can negotiation "fail"?
                                 *params = negotiate_called_params(&call_request, &params);
 
-                                self.change_state(
-                                    &mut state,
-                                    VcState::Called(call_request),
-                                    false,
-                                    false,
-                                );
+                                self.change_state(&mut state, VcState::Called(call_request));
                             }
                             _ => { /* TODO: Ignore */ }
                         }
@@ -320,7 +322,7 @@ impl VcInner {
                             None if elapsed > t21 => {
                                 println!("T21 timeout, sending clear request...");
 
-                                self.send_clear_request(
+                                self.clear_request(
                                     &mut state, 19, // Local procedure error
                                     49, // Time expired for incoming call
                                 );
@@ -342,10 +344,11 @@ impl VcInner {
                             Some(X25Packet::ResetRequest(_)) => {
                                 println!("RESET");
 
-                                self.send_reset_confirm(&mut state);
+                                self.reset_confirm(&mut state);
                             }
                             Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.send_clear_confirm(clear_request, &mut state);
+                                self.clear_confirm(clear_request, &mut state);
+                                self.recv_data_queue.1.notify_all();
                             }
                             Some(_) => { /* TODO: Ignore? */ }
                             None => {}
@@ -362,7 +365,8 @@ impl VcInner {
                                 self.data_transfer(&mut state);
                             }
                             Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.send_clear_confirm(clear_request, &mut state);
+                                self.clear_confirm(clear_request, &mut state);
+                                self.recv_data_queue.1.notify_all();
                             }
                             None if elapsed > t22 => {
                                 println!("T22 timeout");
@@ -438,11 +442,13 @@ impl VcInner {
 
             if let Err(err) = self.send_packet(&call_request.into()) {
                 self.out_of_order(&mut state, err);
+                self.engine_wait.notify_all();
                 return Err(to_other_io_error("todo!"));
             } else {
                 let next_state = VcState::WaitCallAccept(Instant::now());
 
-                self.change_state(&mut state, next_state, true, false);
+                self.change_state(&mut state, next_state);
+                self.engine_wait.notify_all();
             }
         }
 
@@ -507,7 +513,8 @@ impl VcInner {
                 todo!("invalid state");
             }
 
-            self.send_clear_request(&mut state, cause, diagnostic_code);
+            self.clear_request(&mut state, cause, diagnostic_code);
+            self.engine_wait.notify_all();
         }
 
         // Wait for the result.
@@ -518,12 +525,7 @@ impl VcInner {
         }
 
         match *state {
-            VcState::Cleared(_) => {
-                // TODO: We probably shouldn't do this... just leave it in Cleared
-                self.change_state(&mut state, VcState::Ready, true, false);
-
-                Ok(())
-            }
+            VcState::Cleared(_) => Ok(()),
             VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
             _ => panic!("unexpected state"),
         }
@@ -585,7 +587,8 @@ impl VcInner {
                 todo!("invalid state");
             }
 
-            self.send_reset_request(&mut state, cause, diagnostic_code);
+            self.reset_request(&mut state, cause, diagnostic_code);
+            self.engine_wait.notify_all();
         }
 
         // Wait for the result.
@@ -619,13 +622,7 @@ impl VcInner {
             // ...
         });
 
-        self.change_state(state, next_state, false, false);
-    }
-
-    fn out_of_order(&self, state: &mut VcState, err: io::Error) {
-        let next_state = VcState::OutOfOrder;
-
-        self.change_state(state, next_state, false, true);
+        self.change_state(state, next_state);
     }
 
     fn cleared(
@@ -635,10 +632,16 @@ impl VcInner {
     ) {
         let next_state = VcState::Cleared(initiator);
 
-        self.change_state(state, next_state, false, true);
+        self.change_state(state, next_state);
     }
 
-    fn send_clear_request(&self, state: &mut VcState, cause: u8, diagnostic_code: u8) {
+    fn out_of_order(&self, state: &mut VcState, err: io::Error) {
+        let next_state = VcState::OutOfOrder;
+
+        self.change_state(state, next_state);
+    }
+
+    fn clear_request(&self, state: &mut VcState, cause: u8, diagnostic_code: u8) {
         let clear_request = X25ClearRequest {
             modulo: self.params.read().unwrap().modulo,
             channel: self.channel,
@@ -655,11 +658,11 @@ impl VcInner {
         } else {
             let next_state = VcState::WaitClearConfirm(Instant::now());
 
-            self.change_state(state, next_state, false, false);
+            self.change_state(state, next_state);
         }
     }
 
-    fn send_clear_confirm(&self, clear_request: X25ClearRequest, state: &mut VcState) {
+    fn clear_confirm(&self, clear_request: X25ClearRequest, state: &mut VcState) {
         let clear_confirm = X25ClearConfirm {
             modulo: self.params.read().unwrap().modulo,
             channel: self.channel,
@@ -675,7 +678,7 @@ impl VcInner {
         }
     }
 
-    fn send_reset_request(&self, state: &mut VcState, cause: u8, diagnostic_code: u8) {
+    fn reset_request(&self, state: &mut VcState, cause: u8, diagnostic_code: u8) {
         let reset_request = X25ResetRequest {
             modulo: self.params.read().unwrap().modulo,
             channel: self.channel,
@@ -688,11 +691,11 @@ impl VcInner {
         } else {
             let next_state = VcState::WaitResetConfirm(Instant::now());
 
-            self.change_state(state, next_state, false, false);
+            self.change_state(state, next_state);
         }
     }
 
-    fn send_reset_confirm(&self, state: &mut VcState) {
+    fn reset_confirm(&self, state: &mut VcState) {
         let reset_confirm = X25ResetConfirm {
             modulo: self.params.read().unwrap().modulo,
             channel: self.channel,
@@ -702,26 +705,6 @@ impl VcInner {
             self.out_of_order(state, err);
         } else {
             self.data_transfer(state);
-        }
-    }
-
-    fn change_state(
-        &self,
-        state: &mut VcState,
-        new_state: VcState,
-        wake_engine: bool,
-        wake_recv: bool,
-    ) {
-        *state = new_state;
-
-        self.state.1.notify_all();
-
-        if wake_engine {
-            self.engine_wait.notify_all();
-        }
-
-        if wake_recv {
-            self.recv_data_queue.1.notify_all();
         }
     }
 
@@ -735,6 +718,11 @@ impl VcInner {
 
         queue.push_back(data);
         self.recv_data_queue.1.notify_all();
+    }
+
+    fn change_state(&self, state: &mut VcState, new_state: VcState) {
+        *state = new_state;
+        self.state.1.notify_all();
     }
 
     fn send_packet(&self, packet: &X25Packet) -> io::Result<()> {
