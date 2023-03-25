@@ -136,7 +136,7 @@ impl Svc {
         Ok(SvcIncomingCall(svc, call_request))
     }
 
-    pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<XotLink> {
+    pub fn clear(self, cause: u8, diagnostic_code: u8) -> io::Result<()> {
         let inner = self.0;
 
         {
@@ -171,11 +171,18 @@ impl Svc {
             }
         }
 
-        if let Ok(inner) = Arc::try_unwrap(inner) {
-            Ok(inner.close())
-        } else {
-            panic!("uuuuhhhh");
-        }
+        // TODO: It would be nice to be able to return the XotLink to the caller,
+        // but that would require shutting down the receiver thread so that we
+        // can take sole ownership of the link...
+        //
+        // Alternatavely, it may make sense to move the thread into the XotLink
+        // so that we can simply return that to the caller.
+        //
+        // For now we'll just close the socket here, it's not obvious that it even
+        // makes sense in the case of an XOT link to reuse it for another call.
+        let _ = inner.send_link.lock().unwrap().shutdown();
+
+        Ok(())
     }
 
     fn new(link: XotLink, channel: u16, params: &X25Params) -> Self {
@@ -214,7 +221,11 @@ impl SvcIncomingCall {
 
             let mut state = inner.state.0.lock().unwrap();
 
-            // TODO: we should check state here, it may have changed...
+            if !matches!(*state, VcState::Called(_)) {
+                return Err(to_other_io_error(
+                    "other party probably gave up, or link is now out of order",
+                ));
+            }
 
             let call_accept = create_call_accept(inner.channel, &inner.params.read().unwrap());
 
@@ -237,7 +248,11 @@ impl SvcIncomingCall {
 
         let mut state = inner.state.0.lock().unwrap();
 
-        // TODO: we should check state here, it may have changed...
+        if !matches!(*state, VcState::Called(_)) {
+            return Err(to_other_io_error(
+                "other party probably gave up, or link is now out of order",
+            ));
+        }
 
         let clear_request = X25ClearRequest {
             modulo: inner.params.read().unwrap().modulo,
@@ -365,14 +380,6 @@ impl VcInner {
             params: Arc::new(RwLock::new(params.clone())),
             send_data_queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
             recv_data_queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
-        }
-    }
-
-    fn close(self) -> XotLink {
-        if let Ok(link) = Arc::try_unwrap(self.send_link) {
-            link.into_inner().unwrap()
-        } else {
-            todo!("uuuhhh")
         }
     }
 

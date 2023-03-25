@@ -8,7 +8,7 @@
 
 use bytes::{BufMut, Bytes, BytesMut};
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 
 use crate::x25;
 
@@ -68,6 +68,10 @@ impl XotLink {
     /// following read from the underlying `TcpStream` may lead to data loss.
     pub fn into_stream(self) -> TcpStream {
         self.stream
+    }
+
+    pub(crate) fn shutdown(&mut self) -> io::Result<()> {
+        self.stream.shutdown(Shutdown::Both)
     }
 }
 

@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use std::env;
 use std::io;
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
 use std::thread;
 use std::time::Duration;
@@ -68,11 +68,7 @@ fn main() -> io::Result<()> {
 
             println!("CLEARING...");
 
-            let xot_link = svc.clear(0, 0)?;
-
-            let tcp_stream = xot_link.into_stream();
-
-            let _ = tcp_stream.shutdown(Shutdown::Both);
+            svc.clear(0, 0)?;
         }
     }
 
