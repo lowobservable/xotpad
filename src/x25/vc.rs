@@ -464,6 +464,14 @@ impl VcInner {
                             self.change_state(&mut state, VcState::Called(call_request));
                         }
                     }
+                    VcState::Called(_) => {
+                        match packet {
+                            Some(X25Packet::ClearRequest(clear_request)) => {
+                                self.cleared(&mut state, Some(Either::Left(clear_request)));
+                            }
+                            _ => { /* TODO: ignore? */ }
+                        }
+                    }
                     VcState::WaitCallAccept(start_time) => {
                         let elapsed = start_time.elapsed();
                         let X25Params { t21, t23, .. } = *self.params.read().unwrap();
@@ -572,9 +580,6 @@ impl VcInner {
                             }
                             None => timeout = t23 - elapsed,
                         }
-                    }
-                    VcState::Called(_) => {
-                        todo!();
                     }
                     VcState::Cleared(_) | VcState::OutOfOrder => {
                         panic!("unexpected state")

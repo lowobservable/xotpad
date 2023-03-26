@@ -55,6 +55,8 @@ fn main() -> io::Result<()> {
                 &config.x25_params,
             )?;
 
+            thread::sleep(Duration::from_secs(30));
+
             if let Some((cause, diagnostic_code)) = should_accept_call(incoming_call.request()) {
                 incoming_call.clear(cause, diagnostic_code)?;
                 continue;
