@@ -55,8 +55,6 @@ fn main() -> io::Result<()> {
                 &config.x25_params,
             )?;
 
-            thread::sleep(Duration::from_secs(30));
-
             if let Some((cause, diagnostic_code)) = should_accept_call(incoming_call.request()) {
                 incoming_call.clear(cause, diagnostic_code)?;
                 continue;
@@ -66,11 +64,14 @@ fn main() -> io::Result<()> {
 
             println!("ACCEPTED!");
 
-            thread::sleep(Duration::from_secs(5));
+            thread::sleep(Duration::from_secs(10));
 
             println!("CLEARING...");
 
-            svc.clear(0, 0)?;
+            svc.clear(0, 0)?; // -> CLR PAD C:0 D:0
+            //svc.clear(143, 0)?; // -> CLR DTE C:143 D:0
+            //svc.clear(1, 0)?; // -> CLR OCC C:1 D:0
+            //svc.clear(9, 0)?; // -> CLR DER C:9 D:0
         }
     }
 
@@ -80,7 +81,7 @@ fn main() -> io::Result<()> {
 fn should_accept_call(call_request: &X25CallRequest) -> Option<(u8, u8)> {
     dbg!(call_request);
 
-    //Some((0x39, 0))
+    //Some((1, 0))
     None
 }
 

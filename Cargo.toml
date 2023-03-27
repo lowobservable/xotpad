@@ -5,4 +5,3 @@ edition = "2021"
 
 [dependencies]
 bytes = "1.4.0"
-either = "1.8.1"

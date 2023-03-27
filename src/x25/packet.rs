@@ -348,7 +348,7 @@ impl From<X25CallAccept> for X25Packet {
 }
 
 /// X.25 _clear request_ packet.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct X25ClearRequest {
     pub modulo: X25Modulo,
     pub channel: u16,

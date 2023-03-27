@@ -3,7 +3,6 @@
 //! This module provides functionality for handling X.25 virtual circuits.
 
 use bytes::{Bytes, BytesMut};
-use either::Either;
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock};
@@ -34,11 +33,11 @@ enum VcState {
     WaitCallAccept(Instant),
     DataTransfer(DataTransferState),
     WaitResetConfirm(Instant),
-    WaitClearConfirm(Instant),
+    WaitClearConfirm(Instant, ClearInitiator),
 
     // These are our custom ones...
     Called(X25CallRequest),
-    Cleared(Option<Either<X25ClearRequest, X25ClearConfirm>>),
+    Cleared(ClearInitiator, Option<X25ClearConfirm>),
     OutOfOrder,
 }
 
@@ -47,6 +46,13 @@ struct DataTransferState {
     send_seq: u8,
     recv_seq: u8,
     // ...
+}
+
+#[derive(Clone, Debug)]
+enum ClearInitiator {
+    Local,
+    Remote(X25ClearRequest),
+    TimeOut(u8),
 }
 
 /// X.25 _switched_ virtual circuit, or _virtual call_.
@@ -96,10 +102,11 @@ impl Svc {
 
             match *state {
                 VcState::DataTransfer(_) => { /* TODO: describe this! */ }
-                VcState::Cleared(Some(Either::Left(ref clear_request))) => {
-                    return Err(clear_request_to_error(clear_request));
+                VcState::Cleared(ClearInitiator::Remote(ref clear_request), _) => {
+                    return Err(clear_request.into());
                 }
-                VcState::WaitClearConfirm(_) | VcState::Cleared(Some(Either::Right(_))) => {
+                VcState::WaitClearConfirm(_, ClearInitiator::TimeOut(_))
+                | VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
                     // If we receive a clear confirm as a result of making a call,
                     // it should only be because we experienced a call request
                     // timeout - we did receive a clear confirm to our subsequent
@@ -153,19 +160,19 @@ impl Svc {
                     todo!("invalid state");
                 }
 
-                inner.clear_request(&mut state, cause, diagnostic_code);
+                inner.clear_request(&mut state, cause, diagnostic_code, ClearInitiator::Local);
                 inner.engine_wait.notify_all();
             }
 
             // Wait for the result.
             let mut state = inner.state.0.lock().unwrap();
 
-            while matches!(*state, VcState::WaitClearConfirm(_)) {
+            while matches!(*state, VcState::WaitClearConfirm(_, _)) {
                 state = inner.state.1.wait(state).unwrap();
             }
 
             match *state {
-                VcState::Cleared(_) => {}
+                VcState::Cleared(ClearInitiator::Local, _) => {}
                 VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
                 _ => panic!("unexpected state"),
             }
@@ -272,7 +279,7 @@ impl SvcIncomingCall {
             return Err(to_other_io_error("todo!"));
         }
 
-        inner.cleared(&mut state, None);
+        inner.cleared(&mut state, ClearInitiator::Local, None);
         inner.engine_wait.notify_all();
 
         Ok(())
@@ -304,11 +311,11 @@ impl Vc for Svc {
                 match *state {
                     VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
                     }
-                    VcState::Cleared(Some(Either::Left(ref clear_request))) => {
-                        return Err(clear_request_to_error(clear_request));
+                    VcState::Cleared(ClearInitiator::Remote(ref clear_request), _) => {
+                        return Err(clear_request.into());
                     }
-                    VcState::Cleared(Some(Either::Right(_))) => {
-                        todo!("need to think about why this could happen")
+                    VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
+                        todo!("timeout???");
                     }
                     VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
                     _ => panic!("unexpected state"),
@@ -345,7 +352,8 @@ impl Vc for Svc {
 
         match *state {
             VcState::DataTransfer(_) => Ok(()),
-            VcState::WaitClearConfirm(_) | VcState::Cleared(Some(Either::Right(_))) => {
+            VcState::WaitClearConfirm(_, ClearInitiator::TimeOut(_))
+            | VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
                 // If we receive a clear confirm as a result of reset,
                 // it should only be because we experienced a reset request
                 // timeout - we did receive a clear confirm to our subsequent
@@ -467,7 +475,11 @@ impl VcInner {
                     VcState::Called(_) => {
                         match packet {
                             Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.cleared(&mut state, Some(Either::Left(clear_request)));
+                                self.cleared(
+                                    &mut state,
+                                    ClearInitiator::Remote(clear_request),
+                                    None,
+                                );
                             }
                             _ => { /* TODO: ignore? */ }
                         }
@@ -488,15 +500,21 @@ impl VcInner {
                                 self.data_transfer(&mut state);
                             }
                             Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.cleared(&mut state, Some(Either::Left(clear_request)));
+                                self.cleared(
+                                    &mut state,
+                                    ClearInitiator::Remote(clear_request),
+                                    None,
+                                );
                             }
                             Some(_) => { /* TODO: Ignore? */ }
                             None if elapsed > t21 => {
                                 println!("T21 timeout, sending clear request...");
 
                                 self.clear_request(
-                                    &mut state, 19, // Local procedure error
+                                    &mut state,
+                                    19, // Local procedure error
                                     49, // Time expired for incoming call
+                                    ClearInitiator::TimeOut(21),
                                 );
 
                                 timeout = t23;
@@ -514,12 +532,10 @@ impl VcInner {
                                 // send any queued packets, or respond with RR...
                             }
                             Some(X25Packet::ResetRequest(_)) => {
-                                println!("RESET");
-
                                 self.reset_confirm(&mut state);
                             }
                             Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.clear_confirm(clear_request, &mut state);
+                                self.clear_confirm(&mut state, clear_request);
                                 self.recv_data_queue.1.notify_all();
                             }
                             Some(_) => { /* TODO: Ignore? */ }
@@ -528,31 +544,39 @@ impl VcInner {
                     }
                     VcState::WaitResetConfirm(start_time) => {
                         let elapsed = start_time.elapsed();
-                        let t22 = self.params.read().unwrap().t23;
+                        let X25Params { t22, t23, .. } = *self.params.read().unwrap();
 
                         timeout = t22; // TODO: backup!
 
                         match packet {
                             Some(X25Packet::ResetConfirm(_)) => {
-                                println!("RESET");
-
                                 self.data_transfer(&mut state);
                             }
+                            Some(X25Packet::ResetRequest(_)) => {
+                                self.reset_confirm(&mut state);
+                            }
                             Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.clear_confirm(clear_request, &mut state);
+                                self.clear_confirm(&mut state, clear_request);
                                 self.recv_data_queue.1.notify_all();
                             }
                             None if elapsed > t22 => {
-                                println!("T22 timeout");
+                                println!("T22 timeout, sending clear request...");
 
-                                todo!("what does Cisco do?");
+                                self.clear_request(
+                                    &mut state,
+                                    19, // Local procedure error
+                                    51, // Time expired for reset request
+                                    ClearInitiator::TimeOut(22),
+                                );
+
+                                timeout = t23;
                             }
                             None => timeout = t22 - elapsed,
                             Some(_) => { /* TODO: Ignore? Or, do you think I need to send a reset request again!!! */
                             }
                         }
                     }
-                    VcState::WaitClearConfirm(start_time) => {
+                    VcState::WaitClearConfirm(start_time, ref initiator) => {
                         let elapsed = start_time.elapsed();
                         let t23 = self.params.read().unwrap().t23;
 
@@ -560,7 +584,9 @@ impl VcInner {
 
                         match packet {
                             Some(X25Packet::ClearConfirm(clear_confirm)) => {
-                                self.cleared(&mut state, Some(Either::Right(clear_confirm)));
+                                let initiator = initiator.clone();
+
+                                self.cleared(&mut state, initiator, Some(clear_confirm));
                             }
                             Some(X25Packet::ClearRequest(_)) => todo!(),
                             Some(_) => { /* TODO: Ignore? */ }
@@ -581,13 +607,13 @@ impl VcInner {
                             None => timeout = t23 - elapsed,
                         }
                     }
-                    VcState::Cleared(_) | VcState::OutOfOrder => {
+                    VcState::Cleared(_, _) | VcState::OutOfOrder => {
                         panic!("unexpected state")
                     }
                 }
 
                 // Exit loop if we are in a terminal state.
-                if matches!(*state, VcState::Cleared(_) | VcState::OutOfOrder) {
+                if matches!(*state, VcState::Cleared(_, _) | VcState::OutOfOrder) {
                     break;
                 }
             }
@@ -611,9 +637,10 @@ impl VcInner {
     fn cleared(
         &self,
         state: &mut VcState,
-        initiator: Option<Either<X25ClearRequest, X25ClearConfirm>>,
+        initiator: ClearInitiator,
+        clear_confirm: Option<X25ClearConfirm>,
     ) {
-        let next_state = VcState::Cleared(initiator);
+        let next_state = VcState::Cleared(initiator, clear_confirm);
 
         self.change_state(state, next_state);
     }
@@ -624,7 +651,13 @@ impl VcInner {
         self.change_state(state, next_state);
     }
 
-    fn clear_request(&self, state: &mut VcState, cause: u8, diagnostic_code: u8) {
+    fn clear_request(
+        &self,
+        state: &mut VcState,
+        cause: u8,
+        diagnostic_code: u8,
+        initiator: ClearInitiator,
+    ) {
         let clear_request = X25ClearRequest {
             modulo: self.params.read().unwrap().modulo,
             channel: self.channel,
@@ -639,13 +672,14 @@ impl VcInner {
         if let Err(err) = self.send_packet(&clear_request.into()) {
             self.out_of_order(state, err);
         } else {
-            let next_state = VcState::WaitClearConfirm(Instant::now());
+            // TODO: we need to store the initiator here, I think...
+            let next_state = VcState::WaitClearConfirm(Instant::now(), initiator);
 
             self.change_state(state, next_state);
         }
     }
 
-    fn clear_confirm(&self, clear_request: X25ClearRequest, state: &mut VcState) {
+    fn clear_confirm(&self, state: &mut VcState, clear_request: X25ClearRequest) {
         let clear_confirm = X25ClearConfirm {
             modulo: self.params.read().unwrap().modulo,
             channel: self.channel,
@@ -657,7 +691,7 @@ impl VcInner {
         if let Err(err) = self.send_packet(&clear_confirm.into()) {
             self.out_of_order(state, err);
         } else {
-            self.cleared(state, Some(Either::Left(clear_request)));
+            self.cleared(state, ClearInitiator::Remote(clear_request), None);
         }
     }
 
@@ -808,14 +842,16 @@ fn to_other_io_error(e: &str) -> io::Error {
     io::Error::new(io::ErrorKind::Other, msg)
 }
 
-fn clear_request_to_error(clear_request: &X25ClearRequest) -> io::Error {
-    let X25ClearRequest {
-        cause,
-        diagnostic_code,
-        ..
-    } = clear_request;
+impl From<&X25ClearRequest> for io::Error {
+    fn from(clear_request: &X25ClearRequest) -> io::Error {
+        let X25ClearRequest {
+            cause,
+            diagnostic_code,
+            ..
+        } = clear_request;
 
-    let msg = format!("CLR {cause} - {diagnostic_code}");
+        let msg = format!("CLR C:{cause} D:{diagnostic_code}");
 
-    io::Error::new(io::ErrorKind::ConnectionReset, msg)
+        io::Error::new(io::ErrorKind::ConnectionReset, msg)
+    }
 }
