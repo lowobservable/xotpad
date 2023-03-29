@@ -2,7 +2,7 @@
 //!
 //! This module provides functionality for handling X.25 virtual circuits.
 
-use bytes::{Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock};
@@ -304,16 +304,22 @@ impl Vc for Svc {
 
         // TODO: check we are connected
 
+        let packet_size = inner.params.read().unwrap().send_packet_size;
+
         {
             let mut queue = inner.send_data_queue.0.lock().unwrap();
 
-            // TODO: split user_data up into chunks if necessary
+            let mut packets = user_data.chunks(packet_size).peekable();
 
-            queue.push_back(SendData {
-                user_data,
-                qualifier,
-                more: false,
-            });
+            while let Some(packet) = packets.next() {
+                let is_last = packets.peek().is_none();
+
+                queue.push_back(SendData {
+                    user_data: Bytes::copy_from_slice(packet),
+                    qualifier,
+                    more: !is_last,
+                });
+            }
         }
 
         {
@@ -339,9 +345,8 @@ impl Vc for Svc {
             {
                 let state = inner.state.0.lock().unwrap();
 
-                if let Some(data) = queue.pop_front() {
-                    // TODO: this should "reconstruct" MORE packets...
-                    return Ok(Some((data.user_data, data.qualifier)));
+                if let Some(data) = pop_complete_data(&mut queue) {
+                    return Ok(Some(data));
                 }
 
                 // There is no data...
@@ -587,7 +592,8 @@ impl VcInner {
                                 }
 
                                 // TODO: have this queue_recv_data function check that the
-                                // qualifier is consistent across any "more" packets.
+                                // qualifier is consistent across any "more" packets... it can also
+                                // check the data length!
                                 self.queue_recv_data(data);
 
                                 let (sent_count, _) = self.send_queued_data(&mut state);
@@ -983,6 +989,28 @@ impl DataTransferState {
     fn update_send_window(&mut self, seq: u8) -> bool {
         self.send_window.update_start(seq)
     }
+}
+
+fn pop_complete_data(queue: &mut VecDeque<X25Data>) -> Option<(Bytes, bool)> {
+    if queue.is_empty() {
+        return None;
+    }
+
+    let index = queue.iter().position(|d| !d.more)?;
+
+    let packets: Vec<X25Data> = queue.drain(0..=index).collect();
+
+    let user_data_len: usize = packets.iter().map(|p| p.user_data.len()).sum();
+
+    let mut user_data = BytesMut::with_capacity(user_data_len);
+    let mut qualifier = false;
+
+    for packet in packets.into_iter() {
+        user_data.put(packet.user_data);
+        qualifier = packet.qualifier;
+    }
+
+    Some((user_data.freeze(), qualifier))
 }
 
 fn to_other_io_error(e: &str) -> io::Error {

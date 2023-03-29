@@ -16,6 +16,9 @@ pub struct X25Params {
     /// The packet sequence numbering scheme.
     pub modulo: X25Modulo,
 
+    /// The maximum data field length of _data_ packets sent.
+    pub send_packet_size: usize,
+
     /// The number of packets that can be sent before waiting for an acknowledgment.
     pub send_window_size: u8,
 

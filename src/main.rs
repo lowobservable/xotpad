@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
@@ -28,8 +28,18 @@ fn main() -> io::Result<()> {
 
         println!("CONNECTED!");
 
-        for _ in 0..10 {
-            svc.send(Bytes::from_static(b"hello world\r"), false)?;
+        for n in 0..10 {
+            let mut user_data = BytesMut::new();
+
+            if n == 4 {
+                user_data.put_bytes(b'a', 128);
+                user_data.put_bytes(b'b', 128);
+                user_data.put_bytes(b'c', 32);
+            } else {
+                user_data.put_slice(b"hello world\r");
+            }
+
+            svc.send(user_data.freeze(), false)?;
 
             thread::sleep(Duration::from_secs(1));
         }
@@ -90,6 +100,7 @@ fn load_config() -> Config {
     let x25_params = X25Params {
         addr: X121Addr::from_str("73720201").unwrap(),
         modulo: X25Modulo::Normal,
+        send_packet_size: 128,
         send_window_size: 2,
         t21: Duration::from_secs(5),
         t22: Duration::from_secs(5),
