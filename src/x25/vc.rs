@@ -709,7 +709,11 @@ impl VcInner {
                 }
             }
 
-            (recv_queue, _) = self.engine_wait.wait_timeout(recv_queue, timeout).unwrap();
+            // Only wait if the queue is empty, otherwise don't wait as we won't
+            // be woken up again!
+            if recv_queue.is_empty() {
+                (recv_queue, _) = self.engine_wait.wait_timeout(recv_queue, timeout).unwrap();
+            }
         }
 
         println!("VC engine done!");
