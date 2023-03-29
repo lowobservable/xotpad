@@ -3,6 +3,7 @@ use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
+use std::thread;
 use std::time::Duration;
 
 use xotpad::x121::X121Addr;
@@ -26,6 +27,12 @@ fn main() -> io::Result<()> {
         let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &config.x25_params)?;
 
         println!("CONNECTED!");
+
+        for _ in 0..10 {
+            svc.send(Bytes::from_static(b"hello world\r"), false)?;
+
+            thread::sleep(Duration::from_secs(1));
+        }
 
         svc.clear(0, 0)?;
 
@@ -56,6 +63,10 @@ fn main() -> io::Result<()> {
 
             while let Some((user_data, qualifier)) = svc.recv()? {
                 dbg!((user_data, qualifier));
+            }
+
+            if let Some((cause, diagnostic_code)) = svc.cleared() {
+                println!("CLR C:{cause} D:{diagnostic_code}");
             }
         }
     }

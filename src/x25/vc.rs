@@ -193,7 +193,16 @@ impl Svc {
         Ok(())
     }
 
-    // TODO: pub fn cleared(&self) -> Option<(u8, u8)>
+    pub fn cleared(&self) -> Option<(u8, u8)> {
+        let state = self.0.state.0.lock().unwrap();
+
+        match *state {
+            VcState::Cleared(ClearInitiator::Remote(ref clear_request), _) => {
+                Some((clear_request.cause, clear_request.diagnostic_code))
+            }
+            _ => None,
+        }
+    }
 
     fn new(link: XotLink, channel: u16, params: &X25Params) -> Self {
         let (send_link, recv_link) = split_xot_link(link);
@@ -295,17 +304,26 @@ impl Vc for Svc {
 
         // TODO: check we are connected
 
-        let mut queue = inner.send_data_queue.0.lock().unwrap();
+        {
+            let mut queue = inner.send_data_queue.0.lock().unwrap();
 
-        // TODO: split user_data up into chunks if necessary
+            // TODO: split user_data up into chunks if necessary
 
-        queue.push_back(SendData {
-            user_data,
-            qualifier,
-            more: false,
-        });
+            queue.push_back(SendData {
+                user_data,
+                qualifier,
+                more: false,
+            });
+        }
 
-        // TODO: trigger send
+        {
+            let mut state = inner.state.0.lock().unwrap();
+
+            inner.send_queued_data(&mut state);
+
+            // TODO: check the state (could be out of order now) and alert the
+            // client, probably...
+        }
 
         Ok(())
     }
@@ -585,6 +603,18 @@ impl VcInner {
                                 if sent_count == 0 && is_local_ready {
                                     self.receive_ready(&mut state);
                                 }
+                            }
+                            Some(X25Packet::ReceiveReady(receive_ready)) => 'packet: {
+                                if !data_transfer_state.update_send_window(receive_ready.recv_seq) {
+                                    self.reset_request(
+                                        &mut state, 5, // Local procedure error
+                                        2, // Invalid receive sequence
+                                    );
+
+                                    break 'packet;
+                                }
+
+                                self.send_queued_data(&mut state);
                             }
                             Some(X25Packet::ResetRequest(_)) => {
                                 self.reset_confirm(&mut state);
