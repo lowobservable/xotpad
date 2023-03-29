@@ -7,13 +7,10 @@
 pub mod facility;
 pub mod packet;
 mod params;
+mod seq;
 mod vc;
 
-pub use self::facility::X25Facility;
-pub use self::packet::{
-    X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Packet,
-    X25PacketType, X25ReceiveNotReady, X25ReceiveReady, X25ResetConfirm, X25ResetRequest,
-    MAX_PACKET_LEN, MIN_PACKET_LEN,
-};
-pub use self::params::{X25Modulo, X25Params};
+pub use self::packet::{MAX_PACKET_LEN, MIN_PACKET_LEN};
+pub use self::params::X25Params;
+pub use self::seq::X25Modulo;
 pub use self::vc::{Svc, SvcIncomingCall, Vc};

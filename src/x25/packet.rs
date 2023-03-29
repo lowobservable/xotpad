@@ -6,7 +6,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::x121::X121Addr;
 use crate::x25::facility::{decode_facilities, encode_facilities, X25Facility};
-use crate::x25::params::X25Modulo;
+use crate::x25::seq::X25Modulo;
 
 /// Minimum X.25 packet length.
 pub const MIN_PACKET_LEN: usize = 3;

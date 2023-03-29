@@ -5,22 +5,7 @@
 use std::time::Duration;
 
 use crate::x121::X121Addr;
-
-/// X.25 packet sequence numbering scheme.
-///
-/// The sequence numbering scheme specifies the range of sequence numbers, and
-/// in some cases the packet format as a result.
-///
-/// Only normal and extended schemes are currently supported, super extended is
-/// not supported.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum X25Modulo {
-    /// Numbers cycle through the entire range 0 to 7.
-    Normal = 8,
-
-    /// Numbers cycle through the entire range 0 to 127.
-    Extended = 128,
-}
+use crate::x25::X25Modulo;
 
 /// Common X.25 parameters.
 #[derive(Clone, Debug)]
@@ -30,6 +15,9 @@ pub struct X25Params {
 
     /// The packet sequence numbering scheme.
     pub modulo: X25Modulo,
+
+    /// The number of packets that can be sent before waiting for an acknowledgment.
+    pub send_window_size: u8,
 
     /// The _call request_ timeout.
     pub t21: Duration,

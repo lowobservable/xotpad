@@ -3,11 +3,11 @@ use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
-use std::thread;
 use std::time::Duration;
 
 use xotpad::x121::X121Addr;
-use xotpad::x25::{Svc, Vc, X25CallRequest, X25Modulo, X25Params};
+use xotpad::x25::packet::X25CallRequest;
+use xotpad::x25::{Svc, Vc, X25Modulo, X25Params};
 use xotpad::xot::{self, XotLink};
 
 fn main() -> io::Result<()> {
@@ -27,22 +27,12 @@ fn main() -> io::Result<()> {
 
         println!("CONNECTED!");
 
-        for _ in 0..10 {
-            svc.reset(0, 0)?;
-        }
+        svc.clear(0, 0)?;
 
-        while let Ok((data, qualifier)) = svc.recv() {
-            println!("{:?}", data);
-        }
-
-        // recv() will have returned an error when the link was cleared, we
-        // cannot clear here...
-        //
-        // how should recv() do this, how can the "user" get at the clear
-        // cause and diagnostic code?
-        //svc.clear(0, 0)?;
-
-        println!("all done!");
+        //svc.clear(0, 0)?; // -> CLR PAD C:0 D:0
+        //svc.clear(143, 0)?; // -> CLR DTE C:143 D:0
+        //svc.clear(1, 0)?; // -> CLR OCC C:1 D:0
+        //svc.clear(9, 0)?; // -> CLR DER C:9 D:0
     } else if args[1] == "listen" {
         let tcp_listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT))?;
 
@@ -64,14 +54,9 @@ fn main() -> io::Result<()> {
 
             println!("ACCEPTED!");
 
-            thread::sleep(Duration::from_secs(10));
-
-            println!("CLEARING...");
-
-            svc.clear(0, 0)?; // -> CLR PAD C:0 D:0
-            //svc.clear(143, 0)?; // -> CLR DTE C:143 D:0
-            //svc.clear(1, 0)?; // -> CLR OCC C:1 D:0
-            //svc.clear(9, 0)?; // -> CLR DER C:9 D:0
+            while let Some((user_data, qualifier)) = svc.recv()? {
+                dbg!((user_data, qualifier));
+            }
         }
     }
 
@@ -94,6 +79,7 @@ fn load_config() -> Config {
     let x25_params = X25Params {
         addr: X121Addr::from_str("73720201").unwrap(),
         modulo: X25Modulo::Normal,
+        send_window_size: 2,
         t21: Duration::from_secs(5),
         t22: Duration::from_secs(5),
         t23: Duration::from_secs(5),

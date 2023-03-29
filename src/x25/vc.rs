@@ -13,16 +13,17 @@ use crate::x121::X121Addr;
 use crate::x25::facility::X25Facility;
 use crate::x25::packet::{
     X25CallAccept, X25CallRequest, X25ClearConfirm, X25ClearRequest, X25Data, X25Packet,
-    X25ResetConfirm, X25ResetRequest,
+    X25ReceiveReady, X25ResetConfirm, X25ResetRequest,
 };
-use crate::x25::params::{X25Modulo, X25Params};
+use crate::x25::params::X25Params;
+use crate::x25::seq::{next_seq, Window, X25Modulo};
 use crate::xot::XotLink;
 
 /// X.25 virtual circuit.
 pub trait Vc {
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()>;
 
-    fn recv(&self) -> io::Result<(Bytes, bool)>;
+    fn recv(&self) -> io::Result<Option<(Bytes, bool)>>;
 
     fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()>;
 }
@@ -43,9 +44,9 @@ enum VcState {
 
 #[derive(Debug)]
 struct DataTransferState {
-    send_seq: u8,
+    modulo: X25Modulo,
+    send_window: Window,
     recv_seq: u8,
-    // ...
 }
 
 #[derive(Clone, Debug)]
@@ -192,6 +193,8 @@ impl Svc {
         Ok(())
     }
 
+    // TODO: pub fn cleared(&self) -> Option<(u8, u8)>
+
     fn new(link: XotLink, channel: u16, params: &X25Params) -> Self {
         let (send_link, recv_link) = split_xot_link(link);
 
@@ -288,10 +291,26 @@ impl SvcIncomingCall {
 
 impl Vc for Svc {
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
-        todo!()
+        let inner = &self.0;
+
+        // TODO: check we are connected
+
+        let mut queue = inner.send_data_queue.0.lock().unwrap();
+
+        // TODO: split user_data up into chunks if necessary
+
+        queue.push_back(SendData {
+            user_data,
+            qualifier,
+            more: false,
+        });
+
+        // TODO: trigger send
+
+        Ok(())
     }
 
-    fn recv(&self) -> io::Result<(Bytes, bool)> {
+    fn recv(&self) -> io::Result<Option<(Bytes, bool)>> {
         let inner = &self.0;
 
         let mut queue = inner.recv_data_queue.0.lock().unwrap();
@@ -304,15 +323,15 @@ impl Vc for Svc {
 
                 if let Some(data) = queue.pop_front() {
                     // TODO: this should "reconstruct" MORE packets...
-                    return Ok((data.user_data, data.qualifier));
+                    return Ok(Some((data.user_data, data.qualifier)));
                 }
 
                 // There is no data...
                 match *state {
                     VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
                     }
-                    VcState::Cleared(ClearInitiator::Remote(ref clear_request), _) => {
-                        return Err(clear_request.into());
+                    VcState::Cleared(ClearInitiator::Remote(_), _) => {
+                        return Ok(None);
                     }
                     VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
                         todo!("timeout???");
@@ -372,8 +391,14 @@ struct VcInner {
     channel: u16,
     state: Arc<(Mutex<VcState>, Condvar)>,
     params: Arc<RwLock<X25Params>>,
-    send_data_queue: Arc<(Mutex<VecDeque<(Bytes, bool)>>, Condvar)>,
+    send_data_queue: Arc<(Mutex<VecDeque<SendData>>, Condvar)>,
     recv_data_queue: Arc<(Mutex<VecDeque<X25Data>>, Condvar)>,
+}
+
+struct SendData {
+    user_data: Bytes,
+    qualifier: bool,
+    more: bool,
 }
 
 impl VcInner {
@@ -428,8 +453,6 @@ impl VcInner {
             let mut timeout = Duration::from_secs(100_000); // TODO
 
             let packet = recv_queue.pop_front();
-
-            //dbg!(&packet);
 
             // Handle a XOT link error, otherwise pass along the packet.
             let packet = match packet.transpose() {
@@ -492,10 +515,12 @@ impl VcInner {
 
                         match packet {
                             Some(X25Packet::CallAccept(call_accept)) => {
-                                let mut params = self.params.write().unwrap();
+                                {
+                                    let mut params = self.params.write().unwrap();
 
-                                // TODO: can negotiation "fail"?
-                                *params = negotiate_calling_params(&call_accept, &params);
+                                    // TODO: can negotiation "fail"?
+                                    *params = negotiate_calling_params(&call_accept, &params);
+                                }
 
                                 self.data_transfer(&mut state);
                             }
@@ -522,14 +547,44 @@ impl VcInner {
                             None => timeout = t21 - elapsed,
                         }
                     }
-                    VcState::DataTransfer(_) => {
+                    VcState::DataTransfer(ref mut data_transfer_state) => {
                         match packet {
-                            Some(X25Packet::Data(data)) => {
-                                // validate and update windows...
+                            Some(X25Packet::Data(data)) => 'packet: {
+                                if !data_transfer_state.update_recv_seq(data.send_seq) {
+                                    self.reset_request(
+                                        &mut state, 5, // Local procedure error
+                                        1, // Invalid send sequence
+                                    );
 
+                                    break 'packet;
+                                }
+
+                                if !data_transfer_state.update_send_window(data.recv_seq) {
+                                    self.reset_request(
+                                        &mut state, 5, // Local procedure error
+                                        2, // Invalid receive sequence
+                                    );
+
+                                    break 'packet;
+                                }
+
+                                // TODO: have this queue_recv_data function check that the
+                                // qualifier is consistent across any "more" packets.
                                 self.queue_recv_data(data);
 
-                                // send any queued packets, or respond with RR...
+                                let (sent_count, _) = self.send_queued_data(&mut state);
+
+                                if !matches!(*state, VcState::DataTransfer(_)) {
+                                    break 'packet;
+                                }
+
+                                // TODO: clean all of this up and work out if
+                                // sometimes, we should hold off...
+                                let is_local_ready = true;
+
+                                if sent_count == 0 && is_local_ready {
+                                    self.receive_ready(&mut state);
+                                }
                             }
                             Some(X25Packet::ResetRequest(_)) => {
                                 self.reset_confirm(&mut state);
@@ -625,10 +680,16 @@ impl VcInner {
     }
 
     fn data_transfer(&self, state: &mut VcState) {
+        let X25Params {
+            modulo,
+            send_window_size,
+            ..
+        } = *self.params.read().unwrap();
+
         let next_state = VcState::DataTransfer(DataTransferState {
-            send_seq: 0,
+            modulo,
+            send_window: Window::new(send_window_size, modulo),
             recv_seq: 0,
-            // ...
         });
 
         self.change_state(state, next_state);
@@ -725,9 +786,63 @@ impl VcInner {
         }
     }
 
-    fn send_queued_data(&self) -> io::Result<(usize, usize)> {
-        // returns (pkts sent, pkts remaining)...
-        todo!()
+    fn send_queued_data(&self, state: &mut VcState) -> (usize, usize) {
+        let data_transfer_state = match *state {
+            VcState::DataTransfer(ref mut data_transfer_state) => data_transfer_state,
+            _ => panic!("unexpected state"),
+        };
+
+        let mut queue = self.send_data_queue.0.lock().unwrap();
+
+        let mut count = 0;
+
+        while !queue.is_empty() && data_transfer_state.send_window.is_open() {
+            let SendData {
+                user_data,
+                qualifier,
+                more,
+            } = queue.front().unwrap();
+
+            let data = X25Data {
+                modulo: self.params.read().unwrap().modulo,
+                channel: self.channel,
+                send_seq: data_transfer_state.send_window.seq(),
+                recv_seq: data_transfer_state.recv_seq,
+                qualifier: *qualifier,
+                delivery: false,
+                more: *more,
+                user_data: user_data.clone(),
+            };
+
+            if let Err(err) = self.send_packet(&data.into()) {
+                self.out_of_order(state, err);
+                break;
+            }
+
+            queue.pop_front();
+            data_transfer_state.send_window.incr();
+
+            count += 1;
+        }
+
+        (count, queue.len())
+    }
+
+    fn receive_ready(&self, state: &mut VcState) {
+        let recv_seq = match *state {
+            VcState::DataTransfer(ref data_transfer_state) => data_transfer_state.recv_seq,
+            _ => panic!("unexpected state"),
+        };
+
+        let receive_ready = X25ReceiveReady {
+            modulo: self.params.read().unwrap().modulo,
+            channel: self.channel,
+            recv_seq,
+        };
+
+        if let Err(err) = self.send_packet(&receive_ready.into()) {
+            self.out_of_order(state, err);
+        }
     }
 
     fn queue_recv_data(&self, data: X25Data) {
@@ -822,18 +937,22 @@ fn negotiate_called_params(call_request: &X25CallRequest, params: &X25Params) ->
     }
 }
 
-fn split_xot_link(link: XotLink) -> (XotLink, XotLink) {
-    // crazy hack...
-    let tcp_stream = link.into_stream();
+impl DataTransferState {
+    #[must_use]
+    fn update_recv_seq(&mut self, seq: u8) -> bool {
+        if seq != self.recv_seq {
+            return false;
+        }
 
-    (
-        XotLink::new(tcp_stream.try_clone().unwrap()),
-        XotLink::new(tcp_stream),
-    )
-}
+        self.recv_seq = next_seq(seq, self.modulo);
 
-fn next_seq(seq: u8, modulo: X25Modulo) -> u8 {
-    (seq + 1) % (modulo as u8)
+        true
+    }
+
+    #[must_use]
+    fn update_send_window(&mut self, seq: u8) -> bool {
+        self.send_window.update_start(seq)
+    }
 }
 
 fn to_other_io_error(e: &str) -> io::Error {
@@ -854,4 +973,14 @@ impl From<&X25ClearRequest> for io::Error {
 
         io::Error::new(io::ErrorKind::ConnectionReset, msg)
     }
+}
+
+fn split_xot_link(link: XotLink) -> (XotLink, XotLink) {
+    // crazy hack...
+    let tcp_stream = link.into_stream();
+
+    (
+        XotLink::new(tcp_stream.try_clone().unwrap()),
+        XotLink::new(tcp_stream),
+    )
 }
