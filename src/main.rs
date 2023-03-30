@@ -102,6 +102,8 @@ fn load_config() -> Config {
         modulo: X25Modulo::Normal,
         send_packet_size: 128,
         send_window_size: 2,
+        recv_packet_size: 128,
+        recv_window_size: 2,
         t21: Duration::from_secs(5),
         t22: Duration::from_secs(5),
         t23: Duration::from_secs(5),

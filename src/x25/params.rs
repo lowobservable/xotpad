@@ -22,6 +22,10 @@ pub struct X25Params {
     /// The number of packets that can be sent before waiting for an acknowledgment.
     pub send_window_size: u8,
 
+    pub recv_packet_size: usize,
+
+    pub recv_window_size: u8,
+
     /// The _call request_ timeout.
     pub t21: Duration,
 

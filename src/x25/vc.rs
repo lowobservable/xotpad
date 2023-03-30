@@ -924,12 +924,12 @@ fn create_call_request(
 ) -> X25CallRequest {
     let facilities = vec![
         X25Facility::PacketSize {
-            from_called: 128,  // TODO
-            from_calling: 128, // TODO
+            from_called: params.recv_packet_size,
+            from_calling: params.send_packet_size,
         },
         X25Facility::WindowSize {
-            from_called: 2,  // TODO
-            from_calling: 2, // TODO
+            from_called: params.recv_window_size,
+            from_calling: params.send_window_size,
         },
     ];
 
@@ -946,12 +946,12 @@ fn create_call_request(
 fn create_call_accept(channel: u16, params: &X25Params) -> X25CallAccept {
     let facilities = vec![
         X25Facility::PacketSize {
-            from_called: 128,  // TODO
-            from_calling: 128, // TODO
+            from_called: params.send_packet_size,
+            from_calling: params.recv_packet_size,
         },
         X25Facility::WindowSize {
-            from_called: 2,  // TODO
-            from_calling: 2, // TODO
+            from_called: params.send_window_size,
+            from_calling: params.recv_window_size,
         },
     ];
 
