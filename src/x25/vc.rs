@@ -179,6 +179,13 @@ impl Svc {
             }
         }
 
+        // Even if the client cleared, there may be another thread waiting on
+        // recv...
+        //
+        // TODO: should we move this to "cleared", the function that changes
+        // the state?
+        inner.recv_data_queue.1.notify_all();
+
         // TODO: It would be nice to be able to return the XotLink to the caller,
         // but that would require shutting down the receiver thread so that we
         // can take sole ownership of the link...
@@ -353,7 +360,8 @@ impl Vc for Svc {
                 match *state {
                     VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
                     }
-                    VcState::Cleared(ClearInitiator::Remote(_), _) => {
+                    VcState::Cleared(ClearInitiator::Local, _)
+                    | VcState::Cleared(ClearInitiator::Remote(_), _) => {
                         return Ok(None);
                     }
                     VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
@@ -405,6 +413,13 @@ impl Vc for Svc {
             VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
             _ => panic!("unexpected state"),
         }
+    }
+}
+
+impl Clone for Svc {
+    fn clone(&self) -> Self {
+        // TODO: is an appropriate way to do this?
+        Svc(Arc::clone(&self.0))
     }
 }
 
