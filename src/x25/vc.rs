@@ -85,7 +85,7 @@ impl Svc {
                 if let Err(err) = inner.send_packet(&call_request.into()) {
                     inner.out_of_order(&mut state, err);
                     inner.engine_wait.notify_all();
-                    return Err(to_other_io_error("todo!"));
+                    return Err(to_other_io_error("link is out of order"));
                 }
 
                 let next_state = VcState::WaitCallAccept(Instant::now());
@@ -102,16 +102,18 @@ impl Svc {
             }
 
             match *state {
-                VcState::DataTransfer(_) => { /* TODO: describe this! */ }
+                VcState::DataTransfer(_) => { /* This is the expected state */ }
                 VcState::Cleared(ClearInitiator::Remote(ref clear_request), _) => {
-                    return Err(clear_request.into());
+                    let X25ClearRequest {
+                        cause,
+                        diagnostic_code,
+                        ..
+                    } = clear_request;
+                    let msg = format!("C:{cause} D:{diagnostic_code}");
+                    return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
                 }
                 VcState::WaitClearConfirm(_, ClearInitiator::TimeOut(_))
                 | VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
-                    // If we receive a clear confirm as a result of making a call,
-                    // it should only be because we experienced a call request
-                    // timeout - we did receive a clear confirm to our subsequent
-                    // clear request... so we should consider it a timeout.
                     return Err(io::Error::from(io::ErrorKind::TimedOut));
                 }
                 VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
@@ -173,7 +175,7 @@ impl Svc {
             }
 
             match *state {
-                VcState::Cleared(ClearInitiator::Local, _) => {}
+                VcState::Cleared(ClearInitiator::Local, _) => { /* This is the expected state */ }
                 VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
                 _ => panic!("unexpected state"),
             }
@@ -259,7 +261,7 @@ impl SvcIncomingCall {
                 inner.out_of_order(&mut state, err);
                 inner.engine_wait.notify_all();
 
-                return Err(to_other_io_error("todo!"));
+                return Err(to_other_io_error("link is out of order"));
             }
 
             inner.data_transfer(&mut state);
@@ -295,7 +297,7 @@ impl SvcIncomingCall {
             inner.out_of_order(&mut state, err);
             inner.engine_wait.notify_all();
 
-            return Err(to_other_io_error("todo!"));
+            return Err(to_other_io_error("link is out of order"));
         }
 
         inner.cleared(&mut state, ClearInitiator::Local, None);
@@ -347,8 +349,6 @@ impl Vc for Svc {
         let mut queue = inner.recv_data_queue.0.lock().unwrap();
 
         loop {
-            // TODO: confirm this doesn't cause a deadlock...
-            // trying this wihtout the need to clone the state...
             {
                 let state = inner.state.0.lock().unwrap();
 
@@ -356,16 +356,14 @@ impl Vc for Svc {
                     return Ok(Some(data));
                 }
 
-                // There is no data...
                 match *state {
-                    VcState::DataTransfer(_) => { /* we'll try again below, but outside of this lock */
-                    }
+                    VcState::DataTransfer(_) => { /* Try again */ }
                     VcState::Cleared(ClearInitiator::Local, _)
                     | VcState::Cleared(ClearInitiator::Remote(_), _) => {
                         return Ok(None);
                     }
                     VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
-                        todo!("timeout???");
+                        return Err(io::Error::from(io::ErrorKind::TimedOut));
                     }
                     VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
                     _ => panic!("unexpected state"),
@@ -384,8 +382,7 @@ impl Vc for Svc {
             let mut state = inner.state.0.lock().unwrap();
 
             if !matches!(*state, VcState::DataTransfer(_)) {
-                // TODO: what about if the state was cleared by the peer?
-                // is that an error... we don't get to clear with OUR cause...
+                // TODO: what states is this valid in?
                 todo!("invalid state");
             }
 
@@ -401,30 +398,29 @@ impl Vc for Svc {
         }
 
         match *state {
-            VcState::DataTransfer(_) => Ok(()),
+            VcState::DataTransfer(_) => { /* This is the expected state */ }
             VcState::WaitClearConfirm(_, ClearInitiator::TimeOut(_))
             | VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
-                // If we receive a clear confirm as a result of reset,
-                // it should only be because we experienced a reset request
-                // timeout - we did receive a clear confirm to our subsequent
-                // clear request... so we should consider it a timeout.
-                Err(io::Error::from(io::ErrorKind::TimedOut))
+                return Err(io::Error::from(io::ErrorKind::TimedOut))
             }
-            VcState::OutOfOrder => Err(to_other_io_error("link is out of order")),
+            VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
             _ => panic!("unexpected state"),
-        }
+        };
+
+        Ok(())
     }
 }
 
 impl Clone for Svc {
     fn clone(&self) -> Self {
-        // TODO: is an appropriate way to do this?
+        // TODO: is an appropriate way to do this, it may be better to "split" into a read
+        // and write half.
         Svc(Arc::clone(&self.0))
     }
 }
 
 struct VcInner {
-    send_link: Arc<Mutex<XotLink>>, // does this really need to have a lock?
+    send_link: Arc<Mutex<XotLink>>,
     engine_wait: Arc<Condvar>,
     channel: u16,
     state: Arc<(Mutex<VcState>, Condvar)>,
@@ -725,7 +721,7 @@ impl VcInner {
             }
 
             // Only wait if the queue is empty, otherwise don't wait as we won't
-            // be woken up again!
+            // receive a wakeup call.
             if recv_queue.is_empty() {
                 (recv_queue, _) = self.engine_wait.wait_timeout(recv_queue, timeout).unwrap();
             }
@@ -788,7 +784,6 @@ impl VcInner {
         if let Err(err) = self.send_packet(&clear_request.into()) {
             self.out_of_order(state, err);
         } else {
-            // TODO: we need to store the initiator here, I think...
             let next_state = VcState::WaitClearConfirm(Instant::now(), initiator);
 
             self.change_state(state, next_state);
@@ -1036,20 +1031,6 @@ fn to_other_io_error(e: &str) -> io::Error {
     let msg: String = e.into();
     //io::Error::other(e)
     io::Error::new(io::ErrorKind::Other, msg)
-}
-
-impl From<&X25ClearRequest> for io::Error {
-    fn from(clear_request: &X25ClearRequest) -> io::Error {
-        let X25ClearRequest {
-            cause,
-            diagnostic_code,
-            ..
-        } = clear_request;
-
-        let msg = format!("CLR C:{cause} D:{diagnostic_code}");
-
-        io::Error::new(io::ErrorKind::ConnectionReset, msg)
-    }
 }
 
 fn split_xot_link(link: XotLink) -> (XotLink, XotLink) {
