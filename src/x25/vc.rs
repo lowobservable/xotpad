@@ -224,7 +224,7 @@ impl Svc {
             let inner = Arc::clone(&inner);
             let barrier = Arc::clone(&barrier);
 
-            move || inner.run(recv_link, barrier)
+            move || inner.run(recv_link, &barrier)
         });
 
         barrier.wait();
@@ -358,8 +358,7 @@ impl Vc for Svc {
 
                 match *state {
                     VcState::DataTransfer(_) => { /* Try again */ }
-                    VcState::Cleared(ClearInitiator::Local, _)
-                    | VcState::Cleared(ClearInitiator::Remote(_), _) => {
+                    VcState::Cleared(ClearInitiator::Local | ClearInitiator::Remote(_), _) => {
                         return Ok(None);
                     }
                     VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
@@ -450,7 +449,7 @@ impl VcInner {
         }
     }
 
-    fn run(&self, mut recv_link: XotLink, barrier: Arc<Barrier>) {
+    fn run(&self, mut recv_link: XotLink, barrier: &Arc<Barrier>) {
         println!("VC engine starting...");
 
         // Create another thread that reads packets, this will allow the main loop
@@ -837,10 +836,7 @@ impl VcInner {
     }
 
     fn send_queued_data(&self, state: &mut VcState) -> (usize, usize) {
-        let data_transfer_state = match *state {
-            VcState::DataTransfer(ref mut data_transfer_state) => data_transfer_state,
-            _ => panic!("unexpected state"),
-        };
+        let VcState::DataTransfer(ref mut data_transfer_state) = *state else { panic!("unexpected state") };
 
         let mut queue = self.send_data_queue.0.lock().unwrap();
 
@@ -1019,7 +1015,7 @@ fn pop_complete_data(queue: &mut VecDeque<X25Data>) -> Option<(Bytes, bool)> {
     let mut user_data = BytesMut::with_capacity(user_data_len);
     let mut qualifier = false;
 
-    for packet in packets.into_iter() {
+    for packet in packets {
         user_data.put(packet.user_data);
         qualifier = packet.qualifier;
     }
