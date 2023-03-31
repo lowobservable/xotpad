@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 bytes = "1.4.0"
+crossterm = "0.26.1"
 tracing-mutex = "0.2.1"

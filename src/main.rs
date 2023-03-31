@@ -1,6 +1,7 @@
 use bytes::{BufMut, Bytes, BytesMut};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::env;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::str;
 use std::str::FromStr;
@@ -13,14 +14,27 @@ use xotpad::x25::packet::X25CallRequest;
 use xotpad::x25::{Svc, Vc, X25Modulo, X25Params};
 use xotpad::xot::{self, XotLink};
 
+#[derive(Copy, Clone, PartialEq)]
+enum PadUserState {
+    Command,
+    Data,
+}
+
 #[derive(Debug)]
-enum Input {
+enum PadInput {
     Network(io::Result<Option<(Bytes, bool)>>),
-    User(Bytes),
+    User(u8),
+}
+
+enum PadCommand {
+    Clear,
+    Exit,
 }
 
 fn very_simple_pad(svc: Svc) -> io::Result<()> {
     let (tx, rx) = channel();
+
+    enable_raw_mode();
 
     // The network input thread...
     thread::spawn({
@@ -31,7 +45,7 @@ fn very_simple_pad(svc: Svc) -> io::Result<()> {
             loop {
                 let result = svc.recv();
 
-                if tx.send(Input::Network(result)).is_err() {
+                if tx.send(PadInput::Network(result)).is_err() {
                     break;
                 }
             }
@@ -42,20 +56,16 @@ fn very_simple_pad(svc: Svc) -> io::Result<()> {
 
     // The user input thread...
     thread::spawn(move || {
-        for line in io::stdin().lock().lines() {
-            if line.is_err() {
+        let mut reader = BufReader::new(io::stdin());
+
+        loop {
+            let mut buf = [0; 1];
+
+            if reader.read_exact(&mut buf).is_err() {
                 break;
             }
 
-            let line = line.unwrap();
-
-            // Reheat in the microwave...
-            let mut buf = BytesMut::with_capacity(line.len() + 1);
-
-            buf.put(line.as_bytes());
-            buf.put_u8(b'\r');
-
-            if tx.send(Input::User(buf.into())).is_err() {
+            if tx.send(PadInput::User(buf[0])).is_err() {
                 break;
             }
         }
@@ -64,9 +74,14 @@ fn very_simple_pad(svc: Svc) -> io::Result<()> {
     });
 
     // The main loop...
+    let mut user_state = PadUserState::Data; // <- for the "very simple PAD"
+
+    let mut command_buf = BytesMut::with_capacity(128);
+    let mut data_buf = BytesMut::with_capacity(128);
+
     for input in rx {
         match input {
-            Input::Network(Ok(Some((buf, true)))) => match &buf[..] {
+            PadInput::Network(Ok(Some((buf, true)))) => match &buf[..] {
                 b"\x01" => {
                     println!("X.29 command: invitation to clear...");
 
@@ -75,42 +90,93 @@ fn very_simple_pad(svc: Svc) -> io::Result<()> {
                 }
                 _ => println!("X.29 command: {buf:?}"),
             },
-            Input::Network(Ok(Some((buf, false)))) => {
+            PadInput::Network(Ok(Some((buf, false)))) => {
                 let mut out = io::stdout().lock();
 
                 out.write_all(&buf)?;
                 out.flush()?;
             }
-            Input::Network(Ok(None)) => {
+            PadInput::Network(Ok(None)) => {
                 let (cause, diagnostic_code) = svc.cleared().unwrap_or((0, 0));
 
                 println!("CLR xxx C:{cause} D:{diagnostic_code}");
                 break;
             }
-            Input::Network(Err(err)) => {
+            PadInput::Network(Err(err)) => {
                 println!("network error: {err:?}");
                 break;
             }
-            Input::User(buf) => {
-                if buf.starts_with(b"!") && buf.ends_with(b"\r") {
-                    let end = buf.len() - 1;
-                    let cmd = str::from_utf8(&buf[1..end]).unwrap();
+            PadInput::User(byte) => match (user_state, byte) {
+                (PadUserState::Command, /* Ctrl+C */ 0x03) => {
+                    if command_buf.is_empty() {
+                        println!("\rGot a CTRL+C with empty buffer...\r\n");
+                        svc.clear(0, 0)?;
+                        break;
+                    }
 
-                    match cmd {
-                        "clear" => {
+                    command_buf.clear();
+                }
+                (PadUserState::Command, /* Enter */ 0x0d) => {
+                    let buf = command_buf.split();
+
+                    let line = str::from_utf8(&buf[..]).unwrap();
+
+                    print!("\r\n");
+
+                    match parse_pad_command(line) {
+                        Some(PadCommand::Clear | PadCommand::Exit) => {
                             svc.clear(0, 0)?;
                             break;
                         }
-                        _ => println!("unrecognized command: {cmd}"),
+                        None => {
+                            print!("{line} is an unrecognized command!\r\n");
+                        }
                     }
-                } else {
-                    svc.send(buf, false)?;
+
+                    user_state = PadUserState::Data;
                 }
-            }
+                (PadUserState::Command, byte) => {
+                    command_buf.put_u8(byte);
+
+                    io::stdout().write(&[byte]);
+                }
+                (PadUserState::Data, /* Ctrl+P */ 0x10) => {
+                    print!("\r\n*");
+
+                    user_state = PadUserState::Command;
+                }
+                (PadUserState::Data, byte) => {
+                    data_buf.put_u8(byte);
+
+                    if is_data_ready_to_send(&data_buf) {
+                        let buf = data_buf.split();
+
+                        svc.send(buf.into(), false)?;
+                    }
+                }
+            },
         }
+
+        io::stdout().flush();
     }
 
+    disable_raw_mode();
+
+    io::stdout().flush();
+
     Ok(())
+}
+
+fn is_data_ready_to_send(buf: &BytesMut) -> bool {
+    true
+}
+
+fn parse_pad_command(line: &str) -> Option<PadCommand> {
+    match line {
+        "clear" => Some(PadCommand::Clear),
+        "exit" => Some(PadCommand::Exit),
+        _ => None,
+    }
 }
 
 fn main() -> io::Result<()> {
