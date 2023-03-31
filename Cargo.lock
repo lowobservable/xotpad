@@ -9,8 +9,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89b2fd2a0dcf38d7971e2194b6b6eebab45ae01067456a7fd93d5547a61b70be"
 
 [[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
+
+[[package]]
+name = "tracing-mutex"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3df21ca58f0e0b5ee3181d8eebb8f2ec16d6ecbb2a04f351aa6abd7cf700f22"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "xotpad"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "tracing-mutex",
 ]

@@ -5,9 +5,10 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use std::collections::VecDeque;
 use std::io;
-use std::sync::{Arc, Barrier, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
+use tracing_mutex::stdsync::{TracingCondvar, TracingMutex, TracingRwLock};
 
 use crate::x121::X121Addr;
 use crate::x25::facility::X25Facility;
@@ -346,30 +347,35 @@ impl Vc for Svc {
     fn recv(&self) -> io::Result<Option<(Bytes, bool)>> {
         let inner = &self.0;
 
-        let mut queue = inner.recv_data_queue.0.lock().unwrap();
+        // TODO: introduce another outer "recv" lock, maybe, but for now...
 
         loop {
-            {
-                let state = inner.state.0.lock().unwrap();
+            // NOTE: state and recv_data_queue lock acquisition order is important
+            // to avoid deadlock.
+            let state = inner.state.0.lock().unwrap();
 
-                if let Some(data) = pop_complete_data(&mut queue) {
-                    return Ok(Some(data));
-                }
+            let mut queue = inner.recv_data_queue.0.lock().unwrap();
 
-                match *state {
-                    VcState::DataTransfer(_) => { /* Try again */ }
-                    VcState::Cleared(ClearInitiator::Local | ClearInitiator::Remote(_), _) => {
-                        return Ok(None);
-                    }
-                    VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
-                        return Err(io::Error::from(io::ErrorKind::TimedOut));
-                    }
-                    VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
-                    _ => panic!("unexpected state"),
-                }
+            if let Some(data) = pop_complete_data(&mut queue) {
+                return Ok(Some(data));
             }
 
-            queue = inner.recv_data_queue.1.wait(queue).unwrap();
+            match *state {
+                VcState::DataTransfer(_) => { /* Try again */ }
+                VcState::Cleared(ClearInitiator::Local | ClearInitiator::Remote(_), _) => {
+                    return Ok(None);
+                }
+                VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
+                    return Err(io::Error::from(io::ErrorKind::TimedOut));
+                }
+                VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
+                _ => panic!("unexpected state"),
+            }
+
+            drop(state);
+
+            // this will drop the lock on the queue, we'll reaquire above
+            let _ = inner.recv_data_queue.1.wait(queue).unwrap();
         }
     }
 
@@ -419,13 +425,13 @@ impl Clone for Svc {
 }
 
 struct VcInner {
-    send_link: Arc<Mutex<XotLink>>,
-    engine_wait: Arc<Condvar>,
+    send_link: Arc<TracingMutex<XotLink>>,
+    engine_wait: Arc<TracingCondvar>,
     channel: u16,
-    state: Arc<(Mutex<VcState>, Condvar)>,
-    params: Arc<RwLock<X25Params>>,
-    send_data_queue: Arc<(Mutex<VecDeque<SendData>>, Condvar)>,
-    recv_data_queue: Arc<(Mutex<VecDeque<X25Data>>, Condvar)>,
+    state: Arc<(TracingMutex<VcState>, TracingCondvar)>,
+    params: Arc<TracingRwLock<X25Params>>,
+    send_data_queue: Arc<(TracingMutex<VecDeque<SendData>>, TracingCondvar)>,
+    recv_data_queue: Arc<(TracingMutex<VecDeque<X25Data>>, TracingCondvar)>,
 }
 
 struct SendData {
@@ -439,13 +445,13 @@ impl VcInner {
         let state = VcState::Ready;
 
         VcInner {
-            send_link: Arc::new(Mutex::new(send_link)),
-            engine_wait: Arc::new(Condvar::new()),
+            send_link: Arc::new(TracingMutex::new(send_link)),
+            engine_wait: Arc::new(TracingCondvar::new()),
             channel,
-            state: Arc::new((Mutex::new(state), Condvar::new())),
-            params: Arc::new(RwLock::new(params.clone())),
-            send_data_queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
-            recv_data_queue: Arc::new((Mutex::new(VecDeque::new()), Condvar::new())),
+            state: Arc::new((TracingMutex::new(state), TracingCondvar::new())),
+            params: Arc::new(TracingRwLock::new(params.clone())),
+            send_data_queue: Arc::new((TracingMutex::new(VecDeque::new()), TracingCondvar::new())),
+            recv_data_queue: Arc::new((TracingMutex::new(VecDeque::new()), TracingCondvar::new())),
         }
     }
 
@@ -454,7 +460,7 @@ impl VcInner {
 
         // Create another thread that reads packets, this will allow the main loop
         // wait to be interrupted while the XOT socket read is blocked.
-        let recv_queue = Arc::new(Mutex::new(VecDeque::<io::Result<Bytes>>::new()));
+        let recv_queue = Arc::new(TracingMutex::new(VecDeque::<io::Result<Bytes>>::new()));
 
         thread::spawn({
             let recv_queue = Arc::clone(&recv_queue);
