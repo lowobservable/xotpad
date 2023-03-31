@@ -1,6 +1,6 @@
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use std::env;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
 use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
 use std::thread;
@@ -31,7 +31,14 @@ fn very_simple_pad(svc: Svc) {
                 }
             };
 
-            dbg!(user_data, qualifier);
+            if qualifier {
+                println!("X.29 command: {user_data:?}");
+            } else {
+                let mut out = io::stdout().lock();
+
+                out.write(&user_data);
+                out.flush();
+            }
         }
     });
 
@@ -46,7 +53,12 @@ fn very_simple_pad(svc: Svc) {
             break;
         }
 
-        if let Err(err) = svc.send(line.into(), false) {
+        let mut user_data = BytesMut::with_capacity(line.len() + 1);
+
+        user_data.put(line.as_bytes());
+        user_data.put_u8(b'\r');
+
+        if let Err(err) = svc.send(user_data.into(), false) {
             dbg!(err);
             break;
         }
@@ -63,7 +75,7 @@ fn main() -> io::Result<()> {
 
         let xot_link = XotLink::new(tcp_stream);
 
-        let addr = X121Addr::from_str("737101").unwrap();
+        let addr = X121Addr::from_str(&args[2]).unwrap();
         let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
         let svc = Svc::call(xot_link, 1, &addr, &call_user_data, &config.x25_params)?;
