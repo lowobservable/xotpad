@@ -2,7 +2,9 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::env;
 use std::io::{self, BufRead, Write};
 use std::net::{TcpListener, TcpStream};
+use std::str;
 use std::str::FromStr;
+use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 
@@ -11,58 +13,104 @@ use xotpad::x25::packet::X25CallRequest;
 use xotpad::x25::{Svc, Vc, X25Modulo, X25Params};
 use xotpad::xot::{self, XotLink};
 
-fn very_simple_pad(svc: Svc) {
+#[derive(Debug)]
+enum Input {
+    Network(io::Result<Option<(Bytes, bool)>>),
+    User(Bytes),
+}
+
+fn very_simple_pad(svc: Svc) -> io::Result<()> {
+    let (tx, rx) = channel();
+
+    // The network input thread...
     thread::spawn({
         let svc = svc.clone();
+        let tx = tx.clone();
 
-        move || loop {
-            let (user_data, qualifier) = match svc.recv() {
-                Ok(Some(data)) => data,
-                Ok(None) => {
-                    if let Some((cause, diagnostic_code)) = svc.cleared() {
-                        println!("CLR C:{cause} D:{diagnostic_code}");
-                    }
+        move || {
+            loop {
+                let result = svc.recv();
 
+                if tx.send(Input::Network(result)).is_err() {
                     break;
                 }
-                Err(err) => {
-                    dbg!(err);
-                    break;
-                }
-            };
-
-            if qualifier {
-                println!("X.29 command: {user_data:?}");
-            } else {
-                let mut out = io::stdout().lock();
-
-                out.write(&user_data);
-                out.flush();
             }
+
+            println!("done with network input thread");
         }
     });
 
-    for line in io::stdin().lock().lines() {
-        let line = line.unwrap();
-
-        if line == "!clear" {
-            if let Err(err) = svc.clear(0, 0) {
-                dbg!(err);
+    // The user input thread...
+    thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            if line.is_err() {
+                break;
             }
 
-            break;
+            let line = line.unwrap();
+
+            // Reheat in the microwave...
+            let mut buf = BytesMut::with_capacity(line.len() + 1);
+
+            buf.put(line.as_bytes());
+            buf.put_u8(b'\r');
+
+            if tx.send(Input::User(buf.into())).is_err() {
+                break;
+            }
         }
 
-        let mut user_data = BytesMut::with_capacity(line.len() + 1);
+        println!("done with user input thread");
+    });
 
-        user_data.put(line.as_bytes());
-        user_data.put_u8(b'\r');
+    // The main loop...
+    for input in rx {
+        match input {
+            Input::Network(Ok(Some((buf, true)))) => match &buf[..] {
+                b"\x01" => {
+                    println!("X.29 command: invitation to clear...");
 
-        if let Err(err) = svc.send(user_data.into(), false) {
-            dbg!(err);
-            break;
+                    svc.clear(0, 0)?;
+                    break;
+                }
+                _ => println!("X.29 command: {buf:?}"),
+            },
+            Input::Network(Ok(Some((buf, false)))) => {
+                let mut out = io::stdout().lock();
+
+                out.write_all(&buf)?;
+                out.flush()?;
+            }
+            Input::Network(Ok(None)) => {
+                let (cause, diagnostic_code) = svc.cleared().unwrap_or((0, 0));
+
+                println!("CLR xxx C:{cause} D:{diagnostic_code}");
+                break;
+            }
+            Input::Network(Err(err)) => {
+                println!("network error: {err:?}");
+                break;
+            }
+            Input::User(buf) => {
+                if buf.starts_with(b"!") && buf.ends_with(b"\r") {
+                    let end = buf.len() - 1;
+                    let cmd = str::from_utf8(&buf[1..end]).unwrap();
+
+                    match cmd {
+                        "clear" => {
+                            svc.clear(0, 0)?;
+                            break;
+                        }
+                        _ => println!("unrecognized command: {cmd}"),
+                    }
+                } else {
+                    svc.send(buf, false)?;
+                }
+            }
         }
     }
+
+    Ok(())
 }
 
 fn main() -> io::Result<()> {
@@ -82,7 +130,7 @@ fn main() -> io::Result<()> {
 
         println!("CONNECTED!");
 
-        very_simple_pad(svc);
+        very_simple_pad(svc)?;
     } else if args[1] == "listen" {
         let tcp_listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT))?;
 
@@ -104,7 +152,7 @@ fn main() -> io::Result<()> {
 
             println!("ACCEPTED!");
 
-            very_simple_pad(svc);
+            very_simple_pad(svc)?;
         }
     }
 
