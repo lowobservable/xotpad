@@ -1,6 +1,6 @@
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use std::env;
-use std::io;
+use std::io::{self, BufRead};
 use std::net::{TcpListener, TcpStream};
 use std::str::FromStr;
 use std::thread;
@@ -10,6 +10,48 @@ use xotpad::x121::X121Addr;
 use xotpad::x25::packet::X25CallRequest;
 use xotpad::x25::{Svc, Vc, X25Modulo, X25Params};
 use xotpad::xot::{self, XotLink};
+
+fn very_simple_pad(svc: Svc) {
+    thread::spawn({
+        let svc = svc.clone();
+
+        move || loop {
+            let (user_data, qualifier) = match svc.recv() {
+                Ok(Some(data)) => data,
+                Ok(None) => {
+                    if let Some((cause, diagnostic_code)) = svc.cleared() {
+                        println!("CLR C:{cause} D:{diagnostic_code}");
+                    }
+
+                    break;
+                }
+                Err(err) => {
+                    dbg!(err);
+                    break;
+                }
+            };
+
+            dbg!(user_data, qualifier);
+        }
+    });
+
+    for line in io::stdin().lock().lines() {
+        let line = line.unwrap();
+
+        if line == "!clear" {
+            if let Err(err) = svc.clear(0, 0) {
+                dbg!(err);
+            }
+
+            break;
+        }
+
+        if let Err(err) = svc.send(line.into(), false) {
+            dbg!(err);
+            break;
+        }
+    }
+}
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -28,28 +70,7 @@ fn main() -> io::Result<()> {
 
         println!("CONNECTED!");
 
-        for n in 0..10 {
-            let mut user_data = BytesMut::new();
-
-            if n == 4 {
-                user_data.put_bytes(b'a', 128);
-                user_data.put_bytes(b'b', 128);
-                user_data.put_bytes(b'c', 32);
-            } else {
-                user_data.put_slice(b"hello world\r");
-            }
-
-            svc.send(user_data.freeze(), false)?;
-
-            thread::sleep(Duration::from_secs(1));
-        }
-
-        svc.clear(0, 0)?;
-
-        //svc.clear(0, 0)?; // -> CLR PAD C:0 D:0
-        //svc.clear(143, 0)?; // -> CLR DTE C:143 D:0
-        //svc.clear(1, 0)?; // -> CLR OCC C:1 D:0
-        //svc.clear(9, 0)?; // -> CLR DER C:9 D:0
+        very_simple_pad(svc);
     } else if args[1] == "listen" {
         let tcp_listener = TcpListener::bind(("0.0.0.0", xot::TCP_PORT))?;
 
@@ -71,13 +92,7 @@ fn main() -> io::Result<()> {
 
             println!("ACCEPTED!");
 
-            while let Some((user_data, qualifier)) = svc.recv()? {
-                dbg!((user_data, qualifier));
-            }
-
-            if let Some((cause, diagnostic_code)) = svc.cleared() {
-                println!("CLR C:{cause} D:{diagnostic_code}");
-            }
+            very_simple_pad(svc);
         }
     }
 
