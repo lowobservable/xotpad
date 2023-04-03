@@ -19,8 +19,8 @@ use self::x29::X29Command;
 pub mod x28;
 pub mod x29;
 
-pub fn call(addr: X121Addr, x25_params: &X25Params, resolver: &Resolver) -> Result<Svc, String> {
-    let Some(xot_gateway) = resolver.lookup(&addr) else {
+pub fn call(addr: &X121Addr, x25_params: &X25Params, resolver: &Resolver) -> Result<Svc, String> {
+    let Some(xot_gateway) = resolver.lookup(addr) else {
         return Err("no XOT gateway found".into());
     };
 
@@ -33,7 +33,7 @@ pub fn call(addr: X121Addr, x25_params: &X25Params, resolver: &Resolver) -> Resu
 
     let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
-    let svc = match Svc::call(xot_link, 1, &addr, &call_user_data, x25_params) {
+    let svc = match Svc::call(xot_link, 1, addr, &call_user_data, x25_params) {
         Ok(svc) => svc,
         Err(err) => return Err("something went wrong with the call".into()),
     };
@@ -164,7 +164,7 @@ pub fn run(
 
                 spawn_network_thread(svc, tx.clone());
             }
-            PadInput::Network(Ok(Some((buf, true)))) => match X29Command::decode(buf) {
+            PadInput::Network(Ok(Some((buf, true)))) => match X29Command::decode(&buf) {
                 Ok(X29Command::ClearInvitation) => {
                     println!("X.29 command: invitation to clear...");
 
@@ -223,7 +223,7 @@ pub fn run(
 
                     if !line.is_empty() {
                         match X28Command::parse(line) {
-                            Ok(X28Command::Call(addr)) => {
+                            Ok(X28Command::Call(ref addr)) => {
                                 if current_call.is_some() {
                                     print!("ERROR... ENGAGED!\r\n");
                                 } else {

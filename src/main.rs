@@ -30,7 +30,7 @@ fn main() -> io::Result<()> {
     let svc = if args.len() > 1 {
         let addr = X121Addr::from_str(&args[1]).expect("TODO");
 
-        match pad::call(addr, &config.x25_params, &config.resolver) {
+        match pad::call(&addr, &config.x25_params, &config.resolver) {
             Ok(svc) => Some(svc),
             Err(err) => {
                 return Err(io::Error::new(io::ErrorKind::Other, err));
