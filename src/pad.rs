@@ -279,6 +279,9 @@ pub fn run(
                         let (svc, x25_params) = xxx.as_ref().unwrap();
 
                         queue_and_send_data_if_ready(svc, x25_params, &mut data_buf, 0x10)?;
+
+                        print!("\r\n");
+                        user_state = PadUserState::Data;
                     }
                 }
                 (PadUserState::Command, byte) => {
