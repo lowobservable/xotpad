@@ -6,8 +6,10 @@ use std::net::{TcpListener, TcpStream};
 use std::str;
 use std::str::FromStr;
 use std::sync::mpsc::{channel, Sender};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use tracing_mutex::stdsync::TracingMutex;
 
 use xotpad::x121::X121Addr;
 use xotpad::x25::packet::X25CallRequest;
@@ -16,19 +18,17 @@ use xotpad::xot::{self, XotLink};
 
 struct Resolver {
     xot_gateway: String,
-    x25_params: X25Params,
 }
 
 impl Resolver {
-    pub fn new(xot_gateway: &str, x25_params: &X25Params) -> Self {
+    pub fn new(xot_gateway: &str) -> Self {
         Resolver {
             xot_gateway: xot_gateway.to_owned(),
-            x25_params: x25_params.clone(),
         }
     }
 
-    pub fn lookup(&self, x25_addr: &X121Addr) -> Option<(String, X25Params)> {
-        Some((self.xot_gateway.clone(), self.x25_params.clone()))
+    pub fn lookup(&self, x25_addr: &X121Addr) -> Option<String> {
+        Some(self.xot_gateway.clone())
     }
 }
 
@@ -40,6 +40,7 @@ enum PadUserState {
 
 #[derive(Debug)]
 enum PadInput {
+    Call,
     Network(io::Result<Option<(Bytes, bool)>>),
     User(u8),
 }
@@ -52,9 +53,10 @@ enum PadCommand {
 }
 
 fn pad(
+    x25_params: &X25Params,
     resolver: &Resolver,
     tcp_listener: Option<TcpListener>,
-    mut svc: Option<Svc>,
+    svc: Option<Svc>,
 ) -> io::Result<()> {
     let (tx, rx) = channel();
 
@@ -83,15 +85,64 @@ fn pad(
         }
     });
 
-    let mut user_state = PadUserState::Command;
+    let xxx = Arc::new(TracingMutex::new(Option::<(Svc, X25Params)>::None));
 
+    let mut user_state = PadUserState::Command;
     let mut is_one_shot = false;
 
-    if svc.is_some() {
+    if let Some(svc) = svc {
+        let zzz = svc.clone();
+        let x25_params = svc.params();
+
+        xxx.lock().unwrap().replace((svc, x25_params));
+
         user_state = PadUserState::Data;
         is_one_shot = true;
 
-        spawn_network_thread(svc.as_ref().unwrap(), tx.clone());
+        spawn_network_thread(zzz, tx.clone());
+    }
+
+    if let Some(tcp_listener) = tcp_listener {
+        let x25_params = x25_params.clone();
+        let xxx = Arc::clone(&xxx);
+        let tx = tx.clone();
+
+        thread::spawn(move || {
+            for tcp_stream in tcp_listener.incoming() {
+                if tcp_stream.is_err() {
+                    continue;
+                }
+
+                let xot_link = XotLink::new(tcp_stream.unwrap());
+
+                let incoming_call = Svc::listen(
+                    xot_link,
+                    1, /* this "channel" needs to be removed! */
+                    &x25_params,
+                );
+
+                if incoming_call.is_err() {
+                    continue;
+                }
+
+                let incoming_call = incoming_call.unwrap();
+
+                let mut xxx = xxx.lock().unwrap();
+
+                if xxx.is_some() {
+                    incoming_call.clear(1, 0); // Number busy
+                    continue;
+                }
+
+                let svc = incoming_call.accept().unwrap();
+
+                let x25_params = svc.params();
+
+                xxx.replace((svc, x25_params));
+
+                tx.send(PadInput::Call);
+            }
+        });
     }
 
     let mut command_buf = BytesMut::with_capacity(128);
@@ -103,12 +154,21 @@ fn pad(
     }
 
     for input in rx {
+        let mut xxx = xxx.lock().unwrap();
+
         match input {
+            PadInput::Call => {
+                println!("\r\nyou got a call!\r\n");
+
+                user_state = PadUserState::Data;
+
+                spawn_network_thread(xxx.as_ref().unwrap().0.clone(), tx.clone());
+            }
             PadInput::Network(Ok(Some((buf, true)))) => match &buf[..] {
                 b"\x01" => {
                     println!("X.29 command: invitation to clear...");
 
-                    svc.take().unwrap().clear(0, 0)?;
+                    xxx.take().unwrap().0.clear(0, 0)?;
 
                     if is_one_shot {
                         break;
@@ -128,8 +188,9 @@ fn pad(
                 // XXX: we can tell whether we should show anything or not, based
                 // on whether the SVC still "exists" otherwise we would have shown
                 // the important info before...
-                if svc.is_some() {
-                    let (cause, diagnostic_code) = svc.take().unwrap().cleared().unwrap_or((0, 0));
+                if xxx.is_some() {
+                    let (cause, diagnostic_code) =
+                        xxx.take().unwrap().0.cleared().unwrap_or((0, 0));
 
                     println!("CLR xxx C:{cause} D:{diagnostic_code}");
                 }
@@ -143,7 +204,7 @@ fn pad(
             PadInput::Network(Err(err)) => {
                 println!("network error: {err:?}");
 
-                svc.take();
+                xxx.take();
 
                 if is_one_shot {
                     break;
@@ -161,24 +222,27 @@ fn pad(
 
                     match parse_pad_command(line) {
                         Ok(Some(PadCommand::Call(addr))) => {
-                            if svc.is_some() {
+                            if xxx.is_some() {
                                 print!("ERROR... ENGAGED!\r\n");
                             } else {
-                                match call(addr, resolver) {
-                                    Ok(xxx) => {
-                                        svc.replace(xxx);
+                                match call(addr, x25_params, resolver) {
+                                    Ok(svc) => {
+                                        let zzz = svc.clone();
+                                        let x25_params = svc.params();
+
+                                        xxx.replace((svc, x25_params));
 
                                         user_state = PadUserState::Data;
 
-                                        spawn_network_thread(svc.as_ref().unwrap(), tx.clone());
+                                        spawn_network_thread(zzz, tx.clone());
                                     }
                                     Err(xxx) => print!("SOMETHING WENT WRONG: {xxx}\r\n"),
                                 }
                             }
                         }
                         Ok(Some(PadCommand::Clear)) => {
-                            if svc.is_some() {
-                                svc.take().unwrap().clear(0, 0)?;
+                            if xxx.is_some() {
+                                xxx.take().unwrap().0.clear(0, 0)?;
                             } else {
                                 print!("ERROR... NOT CONNECTED!\r\n");
                             }
@@ -188,15 +252,15 @@ fn pad(
                             }
                         }
                         Ok(Some(PadCommand::Status)) => {
-                            if svc.is_some() {
+                            if xxx.is_some() {
                                 print!("ENGAGED\r\n");
                             } else {
                                 print!("FREE\r\n");
                             }
                         }
                         Ok(Some(PadCommand::Exit)) => {
-                            if svc.is_some() {
-                                svc.take().unwrap().clear(0, 0)?;
+                            if xxx.is_some() {
+                                xxx.take().unwrap().0.clear(0, 0)?;
                             }
 
                             break;
@@ -207,7 +271,7 @@ fn pad(
                         }
                     }
 
-                    if svc.is_some() {
+                    if xxx.is_some() {
                         user_state = PadUserState::Data;
                     } else {
                         print!("*");
@@ -216,8 +280,8 @@ fn pad(
                 }
                 (PadUserState::Command, /* Ctrl+C */ 0x03) => {
                     if command_buf.is_empty() {
-                        if svc.is_some() {
-                            svc.take().unwrap().clear(0, 0)?;
+                        if xxx.is_some() {
+                            xxx.take().unwrap().0.clear(0, 0)?;
                         }
 
                         break;
@@ -226,8 +290,10 @@ fn pad(
                     command_buf.clear();
                 }
                 (PadUserState::Command, /* Ctrl+P */ 0x10) => {
-                    if command_buf.is_empty() && svc.is_some() {
-                        queue_and_send_data_if_ready(&mut data_buf, svc.as_ref().unwrap(), 0x10);
+                    if command_buf.is_empty() && xxx.is_some() {
+                        let (svc, x25_params) = xxx.as_ref().unwrap();
+
+                        queue_and_send_data_if_ready(svc, x25_params, &mut data_buf, 0x10)?;
                     }
                 }
                 (PadUserState::Command, byte) => {
@@ -239,7 +305,9 @@ fn pad(
                     ensure_command(&mut user_state);
                 }
                 (PadUserState::Data, byte) => {
-                    queue_and_send_data_if_ready(&mut data_buf, svc.as_ref().unwrap(), byte);
+                    let (svc, x25_params) = xxx.as_ref().unwrap();
+
+                    queue_and_send_data_if_ready(svc, x25_params, &mut data_buf, byte)?;
                 }
             },
         }
@@ -254,10 +322,15 @@ fn pad(
     Ok(())
 }
 
-fn queue_and_send_data_if_ready(buf: &mut BytesMut, svc: &Svc, byte: u8) -> io::Result<()> {
+fn queue_and_send_data_if_ready(
+    svc: &Svc,
+    x25_params: &X25Params,
+    buf: &mut BytesMut,
+    byte: u8,
+) -> io::Result<()> {
     buf.put_u8(byte);
 
-    if is_data_ready_to_send(buf) {
+    if is_data_ready_to_send(buf, x25_params) {
         let user_data = buf.split();
 
         return svc.send(user_data.into(), false);
@@ -266,8 +339,20 @@ fn queue_and_send_data_if_ready(buf: &mut BytesMut, svc: &Svc, byte: u8) -> io::
     Ok(())
 }
 
-// TODO: add x25_params and x3_params to determine when to send!
-fn is_data_ready_to_send(buf: &BytesMut) -> bool {
+// TODO: add x3_params to determine when to send!
+fn is_data_ready_to_send(buf: &BytesMut, x25_params: &X25Params) -> bool {
+    if buf.is_empty() {
+        return false;
+    }
+
+    if buf.len() == x25_params.send_packet_size {
+        return true;
+    }
+
+    let last_byte = buf.last().unwrap();
+
+    // ...
+
     true
 }
 
@@ -281,8 +366,8 @@ fn ensure_command(state: &mut PadUserState) {
     *state = PadUserState::Command;
 }
 
-fn call(addr: X121Addr, resolver: &Resolver) -> Result<Svc, String> {
-    let Some((xot_gateway, x25_params)) = resolver.lookup(&addr) else {
+fn call(addr: X121Addr, x25_params: &X25Params, resolver: &Resolver) -> Result<Svc, String> {
+    let Some(xot_gateway) = resolver.lookup(&addr) else {
         return Err("no XOT gateway found".into());
     };
 
@@ -303,9 +388,7 @@ fn call(addr: X121Addr, resolver: &Resolver) -> Result<Svc, String> {
     Ok(svc)
 }
 
-fn spawn_network_thread(svc: &Svc, channel: Sender<PadInput>) -> JoinHandle<()> {
-    let svc = svc.clone();
-
+fn spawn_network_thread(svc: Svc, channel: Sender<PadInput>) -> JoinHandle<()> {
     thread::spawn(move || {
         loop {
             let result = svc.recv();
@@ -362,14 +445,18 @@ fn main() -> io::Result<()> {
 
     let config = load_config();
 
-    let resolver = Resolver::new(&config.xot_gateway, &config.x25_params);
+    let resolver = Resolver::new(&config.xot_gateway);
 
-    let listener = None;
+    let listener = if args.len() == 1 {
+        Some(TcpListener::bind(("0.0.0.0", xot::TCP_PORT))?)
+    } else {
+        None
+    };
 
     let svc = if args.len() > 1 {
         let addr = X121Addr::from_str(&args[1]).expect("TODO");
 
-        match call(addr, &resolver) {
+        match call(addr, &config.x25_params, &resolver) {
             Ok(svc) => Some(svc),
             Err(err) => {
                 return Err(io::Error::new(io::ErrorKind::Other, err));
@@ -379,7 +466,7 @@ fn main() -> io::Result<()> {
         None
     };
 
-    pad(&resolver, listener, svc)?;
+    pad(&config.x25_params, &resolver, listener, svc)?;
 
     Ok(())
 }

@@ -22,6 +22,8 @@ use crate::xot::XotLink;
 
 /// X.25 virtual circuit.
 pub trait Vc {
+    fn params(&self) -> X25Params;
+
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()>;
 
     fn recv(&self) -> io::Result<Option<(Bytes, bool)>>;
@@ -309,6 +311,10 @@ impl SvcIncomingCall {
 }
 
 impl Vc for Svc {
+    fn params(&self) -> X25Params {
+        self.0.params.read().unwrap().clone()
+    }
+
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
         let inner = &self.0;
 
