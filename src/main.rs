@@ -15,8 +15,6 @@ fn main() -> io::Result<()> {
 
     let config = load_config();
 
-    let resolver = Resolver::new(&config.xot_gateway);
-
     let listener = if true {
         match TcpListener::bind(("0.0.0.0", xot::TCP_PORT)) {
             Ok(listener) => Some(listener),
@@ -32,7 +30,7 @@ fn main() -> io::Result<()> {
     let svc = if args.len() > 1 {
         let addr = X121Addr::from_str(&args[1]).expect("TODO");
 
-        match pad::call(addr, &resolver, &config.x25_params) {
+        match pad::call(addr, &config.x25_params, &config.resolver) {
             Ok(svc) => Some(svc),
             Err(err) => {
                 return Err(io::Error::new(io::ErrorKind::Other, err));
@@ -42,14 +40,14 @@ fn main() -> io::Result<()> {
         None
     };
 
-    pad::run(&config.x25_params, &resolver, listener, svc)?;
+    pad::run(&config.x25_params, &config.resolver, listener, svc)?;
 
     Ok(())
 }
 
 struct Config {
     x25_params: X25Params,
-    xot_gateway: String,
+    resolver: Resolver,
 }
 
 fn load_config() -> Config {
@@ -67,8 +65,10 @@ fn load_config() -> Config {
 
     let xot_gateway = env::var("XOT_GATEWAY").unwrap_or("localhost".into());
 
+    let resolver = Resolver::new(&xot_gateway);
+
     Config {
         x25_params,
-        xot_gateway,
+        resolver,
     }
 }
