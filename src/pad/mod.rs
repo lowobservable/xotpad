@@ -165,7 +165,7 @@ pub fn run(
                 spawn_network_thread(svc, tx.clone());
             }
             PadInput::Network(Ok(Some((buf, true)))) => {
-                let command = X29Command::decode(&buf);
+                let command = X29Command::decode(buf);
 
                 match command {
                     Ok(X29Command::ClearInvitation) => {
