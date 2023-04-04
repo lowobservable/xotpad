@@ -14,7 +14,7 @@ use crate::x25::{Svc, Vc, X25Params};
 use crate::xot::{self, XotLink};
 
 use self::x28::X28Command;
-use self::x29::X29Command;
+use self::x29::X29PadMessage;
 
 pub mod x28;
 pub mod x29;
@@ -180,11 +180,11 @@ pub fn run(
                 spawn_network_thread(svc, tx.clone());
             }
             PadInput::Network(Ok(Some((buf, true)))) => {
-                let command = X29Command::decode(buf);
+                let message = X29PadMessage::decode(buf);
 
-                match command {
-                    Ok(X29Command::ClearInvitation) => {
-                        println!("X.29 command: invitation to clear...");
+                match message {
+                    Ok(X29PadMessage::ClearInvitation) => {
+                        println!("X.29 PAD message: invitation to clear...");
 
                         current_call.take().unwrap().0.clear(0, 0)?;
 
@@ -194,7 +194,7 @@ pub fn run(
 
                         ensure_command(&mut user_state);
                     }
-                    Err(err) => println!("unrecognized or invalid X.29 command"),
+                    Err(err) => println!("unrecognized or invalid X.29 PAD message"),
                 }
             }
             PadInput::Network(Ok(Some((buf, false)))) => {

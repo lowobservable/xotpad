@@ -28,8 +28,8 @@ test = false
 doc = false
 
 [[bin]]
-name = "x29_command_decode"
-path = "fuzz_targets/x29_command_decode.rs"
+name = "x29_pad_message_decode"
+path = "fuzz_targets/x29_pad_message_decode.rs"
 test = false
 doc = false
 

@@ -1,14 +1,14 @@
 use bytes::Bytes;
 
-pub enum X29Command {
+pub enum X29PadMessage {
     ClearInvitation,
 }
 
-impl X29Command {
+impl X29PadMessage {
     pub fn decode(buf: Bytes) -> Result<Self, String> {
         match &buf[..] {
-            b"\x01" => Ok(X29Command::ClearInvitation),
-            _ => Err("unrecognized X.29 command".into()),
+            b"\x01" => Ok(X29PadMessage::ClearInvitation),
+            _ => Err("unrecognized X.29 PAD message".into()),
         }
     }
 }
