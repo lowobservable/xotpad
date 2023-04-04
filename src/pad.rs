@@ -2,7 +2,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::str;
+use std::str::{self, FromStr};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -164,20 +164,24 @@ pub fn run(
 
                 spawn_network_thread(svc, tx.clone());
             }
-            PadInput::Network(Ok(Some((buf, true)))) => match X29Command::decode(&buf) {
-                Ok(X29Command::ClearInvitation) => {
-                    println!("X.29 command: invitation to clear...");
+            PadInput::Network(Ok(Some((buf, true)))) => {
+                let command = X29Command::decode(&buf);
 
-                    current_call.take().unwrap().0.clear(0, 0)?;
+                match command {
+                    Ok(X29Command::ClearInvitation) => {
+                        println!("X.29 command: invitation to clear...");
 
-                    if is_one_shot {
-                        break;
+                        current_call.take().unwrap().0.clear(0, 0)?;
+
+                        if is_one_shot {
+                            break;
+                        }
+
+                        ensure_command(&mut user_state);
                     }
-
-                    ensure_command(&mut user_state);
+                    Err(err) => println!("unrecognized or invalid X.29 command"),
                 }
-                Err(err) => println!("unrecognized or invalid X.29 command"),
-            },
+            }
             PadInput::Network(Ok(Some((buf, false)))) => {
                 let mut out = io::stdout().lock();
 
@@ -222,7 +226,9 @@ pub fn run(
                     print!("\r\n");
 
                     if !line.is_empty() {
-                        match X28Command::parse(line) {
+                        let command = X28Command::from_str(line);
+
+                        match command {
                             Ok(X28Command::Call(ref addr)) => {
                                 if current_call.is_some() {
                                     print!("ERROR... ENGAGED!\r\n");

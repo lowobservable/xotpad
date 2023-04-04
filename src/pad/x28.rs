@@ -9,9 +9,11 @@ pub enum X28Command {
     Exit,
 }
 
-impl X28Command {
-    pub fn parse(line: &str) -> Result<Self, String> {
-        let pair: Vec<&str> = line.trim().splitn(2, ' ').collect();
+impl FromStr for X28Command {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let pair: Vec<&str> = s.trim().splitn(2, ' ').collect();
 
         let command = pair[0].to_uppercase();
         let rest = if pair.len() > 1 { Some(pair[1]) } else { None };
