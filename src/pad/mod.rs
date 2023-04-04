@@ -41,6 +41,19 @@ pub fn call(addr: &X121Addr, x25_params: &X25Params, resolver: &Resolver) -> Res
     Ok(svc)
 }
 
+#[derive(Copy, Clone, PartialEq)]
+enum PadUserState {
+    Command,
+    Data,
+}
+
+#[derive(Debug)]
+enum PadInput {
+    Call,
+    Network(io::Result<Option<(Bytes, bool)>>),
+    User(io::Result<Option<u8>>),
+}
+
 pub fn run(
     x25_params: &X25Params,
     resolver: &Resolver,
@@ -56,19 +69,21 @@ pub fn run(
         let tx = tx.clone();
 
         move || {
-            let mut reader = BufReader::new(io::stdin());
+            let reader = BufReader::new(io::stdin());
 
-            loop {
-                let mut buf = [0; 1];
+            for byte in reader.bytes() {
+                let should_continue = byte.is_ok();
 
-                if reader.read_exact(&mut buf).is_err() {
+                if tx.send(PadInput::User(byte.map(Some))).is_err() {
                     break;
                 }
 
-                if tx.send(PadInput::User(buf[0])).is_err() {
+                if !should_continue {
                     break;
                 }
             }
+
+            let _ = tx.send(PadInput::User(Ok(None)));
 
             println!("done with user input thread");
         }
@@ -217,7 +232,18 @@ pub fn run(
 
                 ensure_command(&mut user_state);
             }
-            PadInput::User(byte) => match (user_state, byte) {
+            PadInput::User(Ok(None)) | PadInput::User(Err(_)) => {
+                println!("here");
+
+                if current_call.is_none() {
+                    break;
+                }
+
+                println!("not really sure what to do here yet...");
+                println!("we probably need to wait for all data to be sent...");
+                println!("then shut down cleanly.");
+            }
+            PadInput::User(Ok(Some(byte))) => match (user_state, byte) {
                 (PadUserState::Command, /* Enter */ 0x0d) => {
                     let buf = command_buf.split();
 
@@ -332,19 +358,6 @@ pub fn run(
     disable_raw_mode()?;
 
     Ok(())
-}
-
-#[derive(Copy, Clone, PartialEq)]
-enum PadUserState {
-    Command,
-    Data,
-}
-
-#[derive(Debug)]
-enum PadInput {
-    Call,
-    Network(io::Result<Option<(Bytes, bool)>>),
-    User(u8),
 }
 
 fn queue_and_send_data_if_ready(
