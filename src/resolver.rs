@@ -1,5 +1,6 @@
 use crate::x121::X121Addr;
 
+#[derive(Debug)]
 pub struct Resolver {
     xot_gateway: String,
 }
