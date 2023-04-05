@@ -55,7 +55,7 @@ struct Args {
         env = "X121_ADDRESS",
         help = "Local X.121 address"
     )]
-    local_addr: X121Addr,
+    local_addr: Option<X121Addr>,
 
     #[arg(
         short = 'g',
@@ -83,8 +83,13 @@ struct Config {
 }
 
 fn load_config(args: &Args) -> Config {
+    let addr = match args.local_addr {
+        Some(ref local_addr) => local_addr.clone(),
+        None => X121Addr::null(),
+    };
+
     let x25_params = X25Params {
-        addr: args.local_addr.clone(),
+        addr,
         modulo: X25Modulo::Normal,
         send_packet_size: 128,
         send_window_size: 2,
