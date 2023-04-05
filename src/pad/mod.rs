@@ -184,7 +184,8 @@ pub fn run(
 
                 match message {
                     Ok(X29PadMessage::ClearInvitation) => {
-                        println!("X.29 PAD message: invitation to clear...");
+                        // TODO: we should attempt to send all that we have before
+                        // clearing...
 
                         current_call.take().unwrap().0.clear(0, 0)?;
 
