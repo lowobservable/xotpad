@@ -464,7 +464,7 @@ impl VcInner {
     fn run(&self, mut recv_link: XotLink, barrier: &Arc<Barrier>) {
         println!("VC engine starting...");
 
-        // Create another thread that reads packets, this will allow the main loop
+        // Create another thread that reads packets, this allows the main loop
         // wait to be interrupted while the XOT socket read is blocked.
         let recv_queue = Arc::new(TracingMutex::new(VecDeque::<io::Result<Bytes>>::new()));
 
@@ -975,6 +975,8 @@ fn create_call_accept(channel: u16, params: &X25Params) -> X25CallAccept {
 
 // TODO: can we make this consume the inncombin params? No more clone?
 fn negotiate_calling_params(call_accept: &X25CallAccept, params: &X25Params) -> X25Params {
+    // TODO: validate window size, based on modulo...
+
     let params = params.clone();
 
     X25Params {
@@ -986,6 +988,8 @@ fn negotiate_calling_params(call_accept: &X25CallAccept, params: &X25Params) -> 
 
 // TODO: can we make this consume the inncombin params? No more clone?
 fn negotiate_called_params(call_request: &X25CallRequest, params: &X25Params) -> X25Params {
+    // TODO: validate window size, based on modulo...
+
     let params = params.clone();
 
     X25Params {
