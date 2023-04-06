@@ -1,17 +1,16 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::io::{self, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::str::{self, FromStr};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use tracing_mutex::stdsync::TracingMutex;
 
-use crate::resolver::Resolver;
 use crate::x121::X121Addr;
 use crate::x25::{Svc, Vc, X25Params};
-use crate::xot::{self, XotLink};
+use crate::xot::{self, XotLink, XotResolver};
 
 use self::x28::X28Command;
 use self::x29::X29PadMessage;
@@ -19,17 +18,12 @@ use self::x29::X29PadMessage;
 pub mod x28;
 pub mod x29;
 
-pub fn call(addr: &X121Addr, x25_params: &X25Params, resolver: &Resolver) -> Result<Svc, String> {
-    let Some(xot_gateway) = resolver.lookup(addr) else {
-        return Err("no XOT gateway found".into());
-    };
-
-    let tcp_stream = match TcpStream::connect((xot_gateway, xot::TCP_PORT)) {
-        Ok(stream) => stream,
-        Err(err) => return Err("unable to connect to XOT gateway".into()),
-    };
-
-    let xot_link = XotLink::new(tcp_stream);
+pub fn call(
+    addr: &X121Addr,
+    x25_params: &X25Params,
+    resolver: &XotResolver,
+) -> Result<Svc, String> {
+    let xot_link = xot::connect(addr, resolver)?;
 
     let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
@@ -56,7 +50,7 @@ enum PadInput {
 
 pub fn run(
     x25_params: &X25Params,
-    resolver: &Resolver,
+    resolver: &XotResolver,
     tcp_listener: Option<TcpListener>,
     svc: Option<Svc>,
 ) -> io::Result<()> {

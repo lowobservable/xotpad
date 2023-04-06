@@ -1,13 +1,13 @@
 use crate::x121::X121Addr;
 
 #[derive(Debug)]
-pub struct Resolver {
+pub struct XotResolver {
     xot_gateway: String,
 }
 
-impl Resolver {
+impl XotResolver {
     pub fn new(xot_gateway: &str) -> Self {
-        Resolver {
+        XotResolver {
             xot_gateway: xot_gateway.to_owned(),
         }
     }

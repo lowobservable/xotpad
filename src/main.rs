@@ -4,10 +4,9 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use xotpad::pad;
-use xotpad::resolver::Resolver;
 use xotpad::x121::X121Addr;
 use xotpad::x25::{X25Modulo, X25Params};
-use xotpad::xot;
+use xotpad::xot::{self, XotResolver};
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
@@ -79,7 +78,7 @@ struct Args {
 #[derive(Debug)]
 struct Config {
     x25_params: X25Params,
-    resolver: Resolver,
+    resolver: XotResolver,
 }
 
 fn load_config(args: &Args) -> Config {
@@ -100,7 +99,7 @@ fn load_config(args: &Args) -> Config {
         t23: Duration::from_secs(5),
     };
 
-    let resolver = Resolver::new(&args.xot_gateway);
+    let resolver = XotResolver::new(&args.xot_gateway);
 
     Config {
         x25_params,

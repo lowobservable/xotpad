@@ -1,19 +1,8 @@
-//! X.25 over TCP.
-//!
-//! This module provides functionality to transmit X.25 packets over TCP.
-//!
-//! The XOT protocol is specified in [IETF RFC 1613].
-//!
-//! [IETF RFC 1613]: https://tools.ietf.org/html/rfc1613
-
 use bytes::{BufMut, Bytes, BytesMut};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 
 use crate::x25;
-
-/// Registered XOT TCP port number.
-pub const TCP_PORT: u16 = 1998;
 
 /// XOT link allowing X.25 packets to be transmitted over a `TcpStream`.
 pub struct XotLink {
@@ -102,7 +91,7 @@ fn encode(x25_packet: &[u8], buf: &mut BytesMut) -> Result<usize, String> {
     Ok(XOT_HEADER_LEN + len)
 }
 
-fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
+pub(crate) fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
     if buf.len() < XOT_HEADER_LEN {
         return Ok(None);
     }
@@ -248,14 +237,5 @@ mod tests {
 
         assert_eq!(&x25_packet[..], b"\x10\x01\xe5");
         assert_eq!(&buf[..], b"\x00");
-    }
-}
-
-#[cfg(fuzzing)]
-pub mod fuzzing {
-    use super::*;
-
-    pub fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
-        super::decode(buf)
     }
 }
