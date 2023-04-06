@@ -227,7 +227,7 @@ pub fn run(
 
                 ensure_command(&mut user_state);
             }
-            PadInput::User(Ok(None)) | PadInput::User(Err(_)) => {
+            PadInput::User(Ok(None) | Err(_)) => {
                 println!("here");
 
                 if current_call.is_none() {
