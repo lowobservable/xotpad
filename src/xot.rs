@@ -23,7 +23,11 @@ pub struct XotLink {
 
 impl XotLink {
     /// Creates a new `XotLink` over the underlying `TcpStream`.
+    ///
+    /// This will set the `TCP_NODELAY` option on the provided socket.
     pub fn new(stream: TcpStream) -> Self {
+        stream.set_nodelay(true).expect("set_nodelay error");
+
         XotLink {
             stream,
             recv_buf: BytesMut::new(),
