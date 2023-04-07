@@ -11,7 +11,7 @@ use xotpad::xot::{self, XotResolver};
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
-    let config = load_config(&args);
+    let (x25_params, resolver) = load_config(&args);
 
     let listener = if args.should_listen {
         match TcpListener::bind(("0.0.0.0", xot::TCP_PORT)) {
@@ -26,7 +26,7 @@ fn main() -> io::Result<()> {
     };
 
     let svc = if let Some(addr) = args.call_addr {
-        match pad::call(&addr, &config.x25_params, &config.resolver) {
+        match pad::call(&addr, &x25_params, &resolver) {
             Ok(svc) => Some(svc),
             Err(err) => {
                 return Err(io::Error::new(io::ErrorKind::Other, err));
@@ -36,7 +36,7 @@ fn main() -> io::Result<()> {
         None
     };
 
-    pad::run(&config.x25_params, &config.resolver, listener, svc)?;
+    pad::run(&x25_params, &resolver, listener, svc)?;
 
     Ok(())
 }
@@ -62,7 +62,7 @@ struct Args {
         env = "XOT_GATEWAY",
         help = "XOT gateway"
     )]
-    xot_gateway: String,
+    xot_gateway: Option<String>,
 
     #[arg(short = 'L', help = "Listen for incoming calls")]
     should_listen: bool,
@@ -75,13 +75,7 @@ struct Args {
     call_addr: Option<X121Addr>,
 }
 
-#[derive(Debug)]
-struct Config {
-    x25_params: X25Params,
-    resolver: XotResolver,
-}
-
-fn load_config(args: &Args) -> Config {
+fn load_config(args: &Args) -> (X25Params, XotResolver) {
     let addr = match args.local_addr {
         Some(ref local_addr) => local_addr.clone(),
         None => X121Addr::null(),
@@ -99,10 +93,13 @@ fn load_config(args: &Args) -> Config {
         t23: Duration::from_secs(5),
     };
 
-    let resolver = XotResolver::new(&args.xot_gateway);
+    let mut resolver = XotResolver::new();
 
-    Config {
-        x25_params,
-        resolver,
+    if let Some(ref xot_gateway) = args.xot_gateway {
+        let _ = resolver.add(".*", xot_gateway);
+    } else {
+        let _ = resolver.add("^(...)(...)..", "\\2.\\1.x25.org");
     }
+
+    (x25_params, resolver)
 }
