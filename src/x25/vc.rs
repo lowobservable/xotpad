@@ -3,6 +3,7 @@
 //! This module provides functionality for handling X.25 virtual circuits.
 
 use bytes::{BufMut, Bytes, BytesMut};
+use std::cmp::min;
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Barrier};
@@ -534,7 +535,6 @@ impl VcInner {
                         if let Some(X25Packet::CallRequest(call_request)) = packet {
                             let mut params = self.params.write().unwrap();
 
-                            // TODO: can negotiation "fail"?
                             *params = negotiate_called_params(&call_request, &params);
 
                             self.change_state(&mut state, VcState::Called(call_request));
@@ -563,7 +563,6 @@ impl VcInner {
                                 {
                                     let mut params = self.params.write().unwrap();
 
-                                    // TODO: can negotiation "fail"?
                                     *params = negotiate_calling_params(&call_accept, &params);
                                 }
 
@@ -613,9 +612,7 @@ impl VcInner {
                                     break 'packet;
                                 }
 
-                                // TODO: have this queue_recv_data function check that the
-                                // qualifier is consistent across any "more" packets... it can also
-                                // check the data length!
+                                // TODO: check for validation errors...
                                 self.queue_recv_data(data);
 
                                 let (sent_count, _) = self.send_queued_data(&mut state);
@@ -904,7 +901,19 @@ impl VcInner {
     }
 
     fn queue_recv_data(&self, data: X25Data) {
+        let params = self.params.read().unwrap();
+
+        if data.user_data.len() > params.recv_packet_size {
+            // TODO: "Packet too long"
+        }
+
         let mut queue = self.recv_data_queue.0.lock().unwrap();
+
+        if let Some(prev_data) = queue.back() {
+            if prev_data.more && data.qualifier != prev_data.qualifier {
+                // TODO: "Inconsistent Q-bit setting"
+            }
+        }
 
         queue.push_back(data);
         self.recv_data_queue.1.notify_all();
@@ -973,30 +982,72 @@ fn create_call_accept(channel: u16, params: &X25Params) -> X25CallAccept {
     }
 }
 
-// TODO: can we make this consume the inncombin params? No more clone?
 fn negotiate_calling_params(call_accept: &X25CallAccept, params: &X25Params) -> X25Params {
-    // TODO: validate window size, based on modulo...
+    let mut params = params.clone();
 
-    let params = params.clone();
+    params.modulo = call_accept.modulo;
 
-    X25Params {
-        addr: params.addr.clone(),
-        modulo: call_accept.modulo,
-        ..params
+    // When negotiating facilities from a received call accept, we are the "calling"
+    // party.
+    let facilities = &call_accept.facilities;
+
+    if let Some((from_called, from_calling)) = get_packet_size(facilities) {
+        params.send_packet_size = from_calling;
+        params.recv_packet_size = from_called;
     }
+
+    if let Some((from_called, from_calling)) = get_window_size(facilities) {
+        params.send_window_size = clamp_window_size(from_calling, params.modulo);
+        params.recv_window_size = clamp_window_size(from_called, params.modulo);
+    }
+
+    params
 }
 
-// TODO: can we make this consume the inncombin params? No more clone?
 fn negotiate_called_params(call_request: &X25CallRequest, params: &X25Params) -> X25Params {
-    // TODO: validate window size, based on modulo...
+    let mut params = params.clone();
 
-    let params = params.clone();
+    params.modulo = call_request.modulo;
 
-    X25Params {
-        addr: params.addr.clone(),
-        modulo: call_request.modulo, // TODO: check Cisco behavior!
-        ..params
+    // When negotiating facilties from a received call request, we are the "called"
+    // party.
+    let facilities = &call_request.facilities;
+
+    if let Some((from_called, from_calling)) = get_packet_size(facilities) {
+        params.send_packet_size = from_called;
+        params.recv_packet_size = from_calling;
     }
+
+    if let Some((from_called, from_calling)) = get_window_size(facilities) {
+        params.send_window_size = clamp_window_size(from_called, params.modulo);
+        params.recv_window_size = clamp_window_size(from_calling, params.modulo);
+    }
+
+    params
+}
+
+fn get_packet_size(facilities: &[X25Facility]) -> Option<(usize, usize)> {
+    facilities.iter().find_map(|f| match f {
+        X25Facility::PacketSize {
+            from_called,
+            from_calling,
+        } => Some((*from_called, *from_calling)),
+        _ => None,
+    })
+}
+
+fn get_window_size(facilities: &[X25Facility]) -> Option<(u8, u8)> {
+    facilities.iter().find_map(|f| match f {
+        X25Facility::WindowSize {
+            from_called,
+            from_calling,
+        } => Some((*from_called, *from_calling)),
+        _ => None,
+    })
+}
+
+fn clamp_window_size(size: u8, modulo: X25Modulo) -> u8 {
+    min(size, (modulo as u8) - 1)
 }
 
 impl DataTransferState {
