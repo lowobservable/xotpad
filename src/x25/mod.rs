@@ -1,11 +1,16 @@
-mod facility;
-pub use self::facility::X25Facility;
+//! X.25 packet switched networking.
+//!
+//! The X.25 protocol is specified in [ITU-T Rec. X.25 (10/96)].
+//!
+//! [ITU-T Rec. X.25 (10/96)]: https://www.itu.int/rec/T-REC-X.25-199610-I
 
-mod packet;
-pub use self::packet::*;
+pub mod facility;
+pub mod packet;
+mod params;
+mod seq;
+mod vc;
 
-mod parameters;
-pub use self::parameters::X25Parameters;
-
-mod virtual_circuit;
-pub use self::virtual_circuit::X25VirtualCircuit;
+pub use self::packet::{MAX_PACKET_LEN, MIN_PACKET_LEN};
+pub use self::params::X25Params;
+pub use self::seq::X25Modulo;
+pub use self::vc::{Svc, SvcIncomingCall, Vc};

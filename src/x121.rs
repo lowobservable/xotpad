@@ -1,74 +1,78 @@
+//! X.121 addressing.
+//!
+//! This module provides functionality for handling X.121 addresses.
+
 use std::fmt;
-use std::iter::IntoIterator;
 use std::str::FromStr;
 
-// TODO: are leading zeros valid?
-
-/// A X.121 address.
-#[derive(Clone, Debug)]
-pub struct X121Address {
-    address: String,
+/// X.121 address.
+#[derive(Clone, PartialEq, Debug)]
+pub struct X121Addr {
+    addr: String,
 }
 
-impl X121Address {
-    /// Parse an address from a series of digits.
-    pub fn from_digits<I: IntoIterator<Item = u8>>(digits: I) -> Result<X121Address, String> {
-        let digits: Vec<u8> = digits.into_iter().collect();
+impl X121Addr {
+    /// Creates a new null `X121Addr`.
+    pub fn null() -> Self {
+        X121Addr {
+            addr: String::new(),
+        }
+    }
 
+    /// Creates a new `X121Addr` from digits.
+    pub fn from_digits(digits: &[u8]) -> Result<Self, String> {
         if digits.len() > 15 {
-            return Err("too long!".into());
+            return Err("too many digits".into());
         }
 
         if !digits.iter().all(|&d| d <= 9) {
-            return Err("all digits must be between 0 and 9!".into());
+            return Err("digits must be between 0 and 9".into());
         }
 
-        let address: String = digits.iter().map(|d| d.to_string()).collect();
+        let addr: String = digits.iter().map(ToString::to_string).collect();
 
-        Ok(X121Address { address })
+        X121Addr::from_str(&addr)
     }
 
+    /// Returns the number of digits.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
-        self.address.len()
+        self.addr.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns `true` if this address has no digits, and `false` otherwise.
+    /// Returns `true` if the address has no digits, and `false` otherwise.
     pub fn is_null(&self) -> bool {
-        self.is_empty()
+        self.addr.is_empty()
     }
 
-    /// Returns an iterator over the address digits.
+    /// Returns an iterator over the digits.
     pub fn digits(&self) -> impl Iterator<Item = u8> + '_ {
-        self.address.chars().map(|c| c.to_digit(10).unwrap() as u8)
+        self.addr
+            .chars()
+            .map(|c| u8::try_from(c.to_digit(10).unwrap()).unwrap())
     }
 }
 
-impl fmt::Display for X121Address {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.address.fmt(f)
+impl fmt::Display for X121Addr {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.addr.fmt(fmt)
     }
 }
 
-impl FromStr for X121Address {
+impl FromStr for X121Addr {
     type Err = String;
 
-    /// Parse an address from a string.
-    fn from_str(address: &str) -> Result<X121Address, String> {
-        if address.len() > 15 {
-            return Err("too long!".into());
+    fn from_str(s: &str) -> Result<Self, String> {
+        if s.len() > 15 {
+            return Err("too long".into());
         }
 
-        if !address.chars().all(|c| c.is_ascii_digit()) {
-            return Err("all digits must be between 0 and 9!".into());
+        // TODO: are leading zeros valid?
+        if !s.chars().all(|c| c.is_ascii_digit()) {
+            return Err("all characters must be digits between 0 and 9".into());
         }
 
-        Ok(X121Address {
-            address: address.into(),
-        })
+        Ok(X121Addr { addr: s.into() })
     }
 }
 
@@ -77,66 +81,89 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_from_digits_with_null_input() {
-        let address = X121Address::from_digits([]);
+    fn from_str_with_null_input() {
+        let addr = X121Addr::from_str("");
 
-        assert!(address.is_ok());
+        assert!(addr.is_ok());
 
-        assert_eq!(address.unwrap().to_string(), "");
+        assert_eq!(addr.unwrap().to_string(), "");
     }
 
     #[test]
-    fn test_from_digits_with_valid_input() {
-        let address = X121Address::from_digits([7, 3, 7, 1, 0, 1]);
+    fn from_str_with_valid_input() {
+        let addr = X121Addr::from_str("73741100");
 
-        assert!(address.is_ok());
+        assert!(addr.is_ok());
 
-        assert_eq!(address.unwrap().to_string(), "737101");
+        assert_eq!(addr.unwrap().to_string(), "73741100");
     }
 
     #[test]
-    fn test_from_digits_with_too_long_input() {
-        let address = X121Address::from_digits([1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6]);
+    fn from_str_with_too_long_input() {
+        let addr = X121Addr::from_str("1234567890123456");
 
-        assert!(address.is_err());
+        assert!(addr.is_err());
     }
 
     #[test]
-    fn test_from_digits_with_out_of_range_input() {
-        let address = X121Address::from_digits([7, 3, 7, 10]);
+    fn from_str_with_non_digit_input() {
+        let addr = X121Addr::from_str("123abc");
 
-        assert!(address.is_err());
+        assert!(addr.is_err());
     }
 
     #[test]
-    fn test_from_str_with_null_input() {
-        let address = X121Address::from_str("");
+    fn from_digits_with_null_input() {
+        let addr = X121Addr::from_digits(&[]);
 
-        assert!(address.is_ok());
+        assert!(addr.is_ok());
 
-        assert_eq!(address.unwrap().to_string(), "");
+        assert_eq!(addr.unwrap().to_string(), "");
     }
 
     #[test]
-    fn test_from_str_with_valid_input() {
-        let address = X121Address::from_str("737101");
+    fn from_digits_with_valid_input() {
+        let addr = X121Addr::from_digits(&[7, 3, 7, 4, 1, 1, 0, 0]);
 
-        assert!(address.is_ok());
+        assert!(addr.is_ok());
 
-        assert_eq!(address.unwrap().to_string(), "737101");
+        assert_eq!(addr.unwrap().to_string(), "73741100");
     }
 
     #[test]
-    fn test_from_str_with_too_long_input() {
-        let address = X121Address::from_str("1234567890123456");
+    fn from_digits_with_too_long_input() {
+        let addr = X121Addr::from_digits(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6]);
 
-        assert!(address.is_err());
+        assert!(addr.is_err());
     }
 
     #[test]
-    fn test_from_str_with_out_of_range_input() {
-        let address = X121Address::from_str("12a");
+    fn from_digits_with_out_of_range_digit_input() {
+        let addr = X121Addr::from_digits(&[1, 2, 3, 10, 20, 100]);
 
-        assert!(address.is_err());
+        assert!(addr.is_err());
+    }
+
+    #[test]
+    fn is_null_true() {
+        let addr = X121Addr::null();
+
+        assert!(addr.is_null());
+    }
+
+    #[test]
+    fn is_null_false() {
+        let addr = X121Addr::from_str("73741100").unwrap();
+
+        assert!(!addr.is_null());
+    }
+
+    #[test]
+    fn digits() {
+        let addr = X121Addr::from_str("73741100").unwrap();
+
+        let digits: Vec<u8> = addr.digits().collect();
+
+        assert_eq!(digits, [7, 3, 7, 4, 1, 1, 0, 0]);
     }
 }

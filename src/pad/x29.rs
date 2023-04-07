@@ -1,61 +1,37 @@
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, Bytes};
 
-pub const PAD_PROTOCOL: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
-
-pub const MAX_CALL_DATA_LENGTH: usize = 12;
-
-pub struct X29CallUserData {
-    protocol: [u8; 4],
-    call_data: Vec<u8>,
+#[derive(PartialEq, Debug)]
+pub enum X29PadMessage {
+    ClearInvitation,
 }
 
-impl X29CallUserData {
-    pub fn new(call_data: &[u8]) -> Result<Self, String> {
-        if call_data.len() > MAX_CALL_DATA_LENGTH {
-            return Err("call data too long".into());
+impl X29PadMessage {
+    pub fn decode(mut buf: Bytes) -> Result<Self, String> {
+        #[allow(clippy::len_zero)]
+        if buf.len() < 1 {
+            return Err("message too short".into());
         }
 
-        Ok(X29CallUserData {
-            protocol: PAD_PROTOCOL,
-            call_data: Vec::from(call_data),
-        })
-    }
+        let code = buf.get_u8();
 
-    pub fn is_pad(&self) -> bool {
-        self.protocol == PAD_PROTOCOL
-    }
-
-    pub fn call_data(&self) -> &[u8] {
-        &self.call_data
+        match code {
+            0x01 => Ok(X29PadMessage::ClearInvitation),
+            _ => Err("unrecognized X.29 PAD message".into()),
+        }
     }
 }
 
-pub fn encode_call_user_data(call_user_data: &X29CallUserData) -> Bytes {
-    let mut buffer = BytesMut::with_capacity(16);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    buffer.put_slice(&call_user_data.protocol);
-    buffer.put_slice(&call_user_data.call_data);
+    #[test]
+    fn decode_clear_invitation() {
+        let buf = Bytes::from_static(b"\x01");
 
-    buffer.freeze()
-}
-
-pub fn decode_call_user_data(buffer: Bytes) -> Result<X29CallUserData, String> {
-    if buffer.remaining() < 4 {
-        return Err("call user data too short".into());
+        assert_eq!(
+            X29PadMessage::decode(buf),
+            Ok(X29PadMessage::ClearInvitation)
+        );
     }
-
-    if buffer.remaining() > 16 {
-        return Err("call user data too long".into());
-    }
-
-    let mut protocol: [u8; 4] = [0; 4];
-
-    protocol.copy_from_slice(&buffer[..4]);
-
-    let call_data = buffer[4..].to_vec();
-
-    Ok(X29CallUserData {
-        protocol,
-        call_data,
-    })
 }
