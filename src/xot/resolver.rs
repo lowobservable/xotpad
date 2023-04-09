@@ -13,7 +13,7 @@ impl XotResolver {
     }
 
     pub fn add(&mut self, x25_addr: &str, gateway: &str) -> Result<(), String> {
-        let regex = Regex::new(x25_addr).map_err(|e| "TODO")?;
+        let regex = Regex::new(x25_addr).map_err(|e| format!("invalid regex: {e}"))?;
 
         self.rules.push((regex, gateway.into()));
 
@@ -23,9 +23,9 @@ impl XotResolver {
     pub fn lookup(&self, x25_addr: &X121Addr) -> Option<String> {
         let x25_addr = x25_addr.to_string();
 
-        for (regex, gateway) in self.rules.iter() {
+        for (regex, gateway) in &self.rules {
             if let Some(captures) = regex.captures(&x25_addr) {
-                return Some(template_replace(gateway, captures));
+                return Some(template_replace(gateway, &captures));
             }
         }
 
@@ -39,7 +39,7 @@ impl Default for XotResolver {
     }
 }
 
-fn template_replace(template: &str, captures: Captures) -> String {
+fn template_replace(template: &str, captures: &Captures) -> String {
     let mut value = template.to_string();
 
     for (index, replacement) in captures.iter().enumerate().skip(1) {

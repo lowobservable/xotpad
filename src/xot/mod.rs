@@ -6,6 +6,7 @@
 //!
 //! [IETF RFC 1613]: https://tools.ietf.org/html/rfc1613
 
+use std::io;
 use std::net::TcpStream;
 
 use crate::x121::X121Addr;
@@ -19,15 +20,13 @@ pub use self::resolver::XotResolver;
 /// Registered XOT TCP port number.
 pub const TCP_PORT: u16 = 1998;
 
-pub fn connect(addr: &X121Addr, resolver: &XotResolver) -> Result<XotLink, String> {
+pub fn connect(addr: &X121Addr, resolver: &XotResolver) -> io::Result<XotLink> {
     let Some(xot_gateway) = resolver.lookup(addr) else {
-        return Err("no XOT gateway found".into());
+        // TODO: HostUnreachable...
+        return Err(io::Error::new(io::ErrorKind::Other, "no XOT gateway found".to_owned()));
     };
 
-    let tcp_stream = match TcpStream::connect((xot_gateway, TCP_PORT)) {
-        Ok(stream) => stream,
-        Err(err) => return Err("unable to connect to XOT gateway".into()),
-    };
+    let tcp_stream = TcpStream::connect((xot_gateway, TCP_PORT))?;
 
     let xot_link = XotLink::new(tcp_stream);
 

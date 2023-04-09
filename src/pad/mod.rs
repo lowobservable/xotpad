@@ -15,24 +15,18 @@ use crate::xot::{self, XotLink, XotResolver};
 use self::x28::X28Command;
 use self::x29::X29PadMessage;
 
-pub mod x28;
-pub mod x29;
+mod x28;
+mod x29;
+mod x3;
 
-pub fn call(
-    addr: &X121Addr,
-    x25_params: &X25Params,
-    resolver: &XotResolver,
-) -> Result<Svc, String> {
+pub use self::x3::X3Params;
+
+pub fn call(addr: &X121Addr, x25_params: &X25Params, resolver: &XotResolver) -> io::Result<Svc> {
     let xot_link = xot::connect(addr, resolver)?;
 
     let call_user_data = Bytes::from_static(b"\x01\x00\x00\x00");
 
-    let svc = match Svc::call(xot_link, 1, addr, &call_user_data, x25_params) {
-        Ok(svc) => svc,
-        Err(err) => return Err("something went wrong with the call".into()),
-    };
-
-    Ok(svc)
+    Svc::call(xot_link, 1, addr, &call_user_data, x25_params)
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -53,6 +47,7 @@ pub fn run(
     resolver: &XotResolver,
     tcp_listener: Option<TcpListener>,
     svc: Option<Svc>,
+    x3_params: &X3Params,
 ) -> io::Result<()> {
     let (tx, rx) = channel();
 
@@ -155,6 +150,9 @@ pub fn run(
     let mut command_buf = BytesMut::with_capacity(128);
     let mut data_buf = BytesMut::with_capacity(128);
 
+    let user_x3_params = x3_params.clone();
+    let mut current_x3_params = x3_params.clone();
+
     if user_state == PadUserState::Command {
         print!("*");
         io::stdout().flush()?;
@@ -176,7 +174,25 @@ pub fn run(
             PadInput::Network(Ok(Some((buf, true)))) => {
                 let message = X29PadMessage::decode(buf);
 
+                dbg!(&message);
+
                 match message {
+                    Ok(X29PadMessage::Set(ref params)) => {
+                        let (svc, _) = current_call.as_ref().unwrap();
+
+                        x29_set(svc, &mut current_x3_params, params, &user_x3_params)?;
+                    }
+                    Ok(X29PadMessage::Read(ref params)) => {
+                        let (svc, _) = current_call.as_ref().unwrap();
+
+                        x29_read(svc, &current_x3_params, params)?;
+                    }
+                    Ok(X29PadMessage::SetRead(ref params)) => {
+                        let (svc, _) = current_call.as_ref().unwrap();
+
+                        x29_set_read(svc, &mut current_x3_params, params, &user_x3_params)?;
+                    }
+                    Ok(X29PadMessage::Indicate(_)) => todo!("XXX"),
                     Ok(X29PadMessage::ClearInvitation) => {
                         // TODO: we should attempt to send all that we have before
                         // clearing...
@@ -323,7 +339,13 @@ pub fn run(
                     if command_buf.is_empty() && current_call.is_some() {
                         let (svc, x25_params) = current_call.as_ref().unwrap();
 
-                        queue_and_send_data_if_ready(svc, x25_params, &mut data_buf, 0x10)?;
+                        queue_and_send_data_if_ready(
+                            svc,
+                            x25_params,
+                            &current_x3_params,
+                            &mut data_buf,
+                            0x10,
+                        )?;
 
                         print!("\r\n");
                         user_state = PadUserState::Data;
@@ -338,9 +360,19 @@ pub fn run(
                     ensure_command(&mut user_state);
                 }
                 (PadUserState::Data, byte) => {
+                    if current_x3_params.echo {
+                        io::stdout().write_all(&[byte])?;
+                    }
+
                     let (svc, x25_params) = current_call.as_ref().unwrap();
 
-                    queue_and_send_data_if_ready(svc, x25_params, &mut data_buf, byte)?;
+                    queue_and_send_data_if_ready(
+                        svc,
+                        x25_params,
+                        &current_x3_params,
+                        &mut data_buf,
+                        byte,
+                    )?;
                 }
             },
         }
@@ -358,22 +390,31 @@ pub fn run(
 fn queue_and_send_data_if_ready(
     svc: &Svc,
     x25_params: &X25Params,
+    x3_params: &X3Params,
     buf: &mut BytesMut,
     byte: u8,
 ) -> io::Result<()> {
     buf.put_u8(byte);
 
-    if is_data_ready_to_send(buf, x25_params) {
-        let user_data = buf.split();
-
-        return svc.send(user_data.into(), false);
-    }
-
-    Ok(())
+    send_data_if_ready(svc, x25_params, x3_params, buf)
 }
 
-// TODO: add x3_params to determine when to send!
-fn is_data_ready_to_send(buf: &BytesMut, x25_params: &X25Params) -> bool {
+fn send_data_if_ready(
+    svc: &Svc,
+    x25_params: &X25Params,
+    x3_params: &X3Params,
+    buf: &mut BytesMut,
+) -> io::Result<()> {
+    if !should_send_data(buf, x25_params, x3_params) {
+        return Ok(());
+    }
+
+    let user_data = buf.split();
+
+    svc.send(user_data.into(), false)
+}
+
+fn should_send_data(buf: &BytesMut, x25_params: &X25Params, x3_params: &X3Params) -> bool {
     if buf.is_empty() {
         return false;
     }
@@ -382,11 +423,50 @@ fn is_data_ready_to_send(buf: &BytesMut, x25_params: &X25Params) -> bool {
         return true;
     }
 
-    let last_byte = buf.last().unwrap();
+    let forward = x3_params.forward;
+    let last_byte = *buf.last().unwrap();
 
-    // ...
+    if forward & 1 == 1 && last_byte.is_ascii_alphanumeric() {
+        return true;
+    }
 
-    true
+    // CR (0x0d)
+    if forward & 2 == 2 && last_byte == 0x0d {
+        return true;
+    }
+
+    // ESC (0x1b) BEL (0x07) ENQ (0x05) ACK (0x06)
+    if forward & 4 == 4 && [0x1b, 0x07, 0x05, 0x06].contains(&last_byte) {
+        return true;
+    }
+
+    // DEL (0x7f), CAN (0x18), DC2 (0x12)
+    if forward & 8 == 8 && [0x7f, 0x18, 0x12].contains(&last_byte) {
+        return true;
+    }
+
+    // EOT (0x04), ETX (0x03)
+    if forward & 16 == 16 && [0x04, 0x03].contains(&last_byte) {
+        return true;
+    }
+
+    // HT (0x09), LF (0x0a), VT (0x0b), FF (0x0c)
+    if forward & 32 == 32 && [0x09, 0x0a, 0x0b, 0x0c].contains(&last_byte) {
+        return true;
+    }
+
+    // Everything else from IA5 columns 0 and 1...
+    if forward & 64 == 64
+        && [
+            0x00, 0x01, 0x02, 0x08, 0x0e, 0x0f, 0x10, 0x11, 0x13, 0x14, 0x15, 0x16, 0x17, 0x19,
+            0x1a, 0x1c, 0x1d, 0x1e, 0x1f,
+        ]
+        .contains(&last_byte)
+    {
+        return true;
+    }
+
+    false
 }
 
 fn ensure_command(state: &mut PadUserState) {
@@ -419,4 +499,102 @@ fn spawn_network_thread(svc: &Svc, channel: Sender<PadInput>) -> JoinHandle<()> 
 
         println!("done with network input thread");
     })
+}
+
+fn x29_read(svc: &Svc, current_params: &X3Params, requested: &[u8]) -> io::Result<()> {
+    let requested = if requested.is_empty() {
+        &x3::PARAMS
+    } else {
+        requested
+    };
+
+    let params = requested
+        .iter()
+        .map(|&p| (p, current_params.get(p).unwrap_or(0x81)))
+        .collect();
+
+    let message = X29PadMessage::Indicate(params);
+
+    let mut buf = BytesMut::new();
+
+    message.encode(&mut buf);
+
+    svc.send(buf.into(), true)
+}
+
+fn x29_set(
+    svc: &Svc,
+    current_params: &mut X3Params,
+    requested: &[(u8, u8)],
+    user_params: &X3Params,
+) -> io::Result<()> {
+    if requested.is_empty() {
+        *current_params = user_params.clone();
+        return Ok(());
+    }
+
+    let errors: Vec<(u8, u8)> = requested
+        .iter()
+        .map(|&p| (p.0, current_params.set(p.0, p.1)))
+        .filter_map(|(p, r)| {
+            // TODO: improve this, so we can return a correct error code!
+            if r.is_err() {
+                Some((p, 0x80))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if errors.is_empty() {
+        return Ok(());
+    }
+
+    let message = X29PadMessage::Indicate(errors);
+
+    let mut buf = BytesMut::new();
+
+    message.encode(&mut buf);
+
+    svc.send(buf.into(), true)
+}
+
+fn x29_set_read(
+    svc: &Svc,
+    current_params: &mut X3Params,
+    requested: &[(u8, u8)],
+    user_params: &X3Params,
+) -> io::Result<()> {
+    if requested.is_empty() {
+        *current_params = user_params.clone();
+
+        let requested: Vec<u8> = requested.iter().map(|&p| p.0).collect();
+
+        return x29_read(svc, current_params, &requested);
+    }
+
+    let params: Vec<(u8, u8)> = requested
+        .iter()
+        .map(|&p| {
+            // TODO: improve this, so we can return a correct error code!
+            if current_params.set(p.0, p.1).is_err() {
+                return (p.0, 0x80);
+            }
+
+            (p.0, current_params.get(p.0).unwrap_or(0x81))
+        })
+        .collect();
+
+    let message = X29PadMessage::Indicate(params);
+
+    let mut buf = BytesMut::new();
+
+    message.encode(&mut buf);
+
+    svc.send(buf.into(), true)
+}
+
+#[cfg(fuzzing)]
+pub mod fuzzing {
+    pub use super::x29::X29PadMessage;
 }

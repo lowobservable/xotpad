@@ -15,7 +15,7 @@ allowing access to X.25 networks using XOT described in
       - [x] Flow control parameter negotiation (packet and window size)
   - [ ] Interactive _Triple-X_ PAD (X.3, X.28 and X.29)
   - [ ] Host PAD providing access to local processes
-  - [x] DNS-based X.25 address resolution
+  - [ ] DNS-based X.25 address resolution
 
 ## Usage
 

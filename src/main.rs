@@ -3,7 +3,7 @@ use std::io;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use xotpad::pad;
+use xotpad::pad::{self, X3Params};
 use xotpad::x121::X121Addr;
 use xotpad::x25::{X25Modulo, X25Params};
 use xotpad::xot::{self, XotResolver};
@@ -11,15 +11,14 @@ use xotpad::xot::{self, XotResolver};
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
-    let (x25_params, resolver) = load_config(&args);
+    let (x25_params, resolver, x3_params) = load_config(&args);
 
     let listener = if args.should_listen {
-        match TcpListener::bind(("0.0.0.0", xot::TCP_PORT)) {
-            Ok(listener) => Some(listener),
-            Err(err) => {
-                println!("unable to bind... will not listen!");
-                None
-            }
+        if let Ok(listener) = TcpListener::bind(("0.0.0.0", xot::TCP_PORT)) {
+            Some(listener)
+        } else {
+            println!("unable to bind... will not listen!");
+            None
         }
     } else {
         None
@@ -36,7 +35,7 @@ fn main() -> io::Result<()> {
         None
     };
 
-    pad::run(&x25_params, &resolver, listener, svc)?;
+    pad::run(&x25_params, &resolver, listener, svc, &x3_params)?;
 
     Ok(())
 }
@@ -75,7 +74,7 @@ struct Args {
     call_addr: Option<X121Addr>,
 }
 
-fn load_config(args: &Args) -> (X25Params, XotResolver) {
+fn load_config(args: &Args) -> (X25Params, XotResolver, X3Params) {
     let addr = match args.local_addr {
         Some(ref local_addr) => local_addr.clone(),
         None => X121Addr::null(),
@@ -101,5 +100,10 @@ fn load_config(args: &Args) -> (X25Params, XotResolver) {
         let _ = resolver.add("^(...)(...)..", "\\2.\\1.x25.org");
     }
 
-    (x25_params, resolver)
+    let x3_params = X3Params {
+        echo: true,
+        forward: 2,
+    };
+
+    (x25_params, resolver, x3_params)
 }

@@ -3,16 +3,83 @@ name: Build
 on: push
 
 jobs:
-  build:
+  check:
+    name: Check
     runs-on: ubuntu-latest
-    name: Build
     steps:
-      - uses: actions/checkout@v2
-      - name: Build
-        run: cargo build --release
-      - name: Run unit tests
-        run: cargo test
-      - name: Run linter
+      - uses: actions/checkout@v3
+      - name: Install minimal toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: clippy, rustfmt
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Check
+        run: cargo check
+      - name: Clippy
         run: cargo clippy
-      - name: Run format check
+      - name: Format
         run: cargo fmt --check
+
+  test:
+    needs: check
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install minimal toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Unit tests
+        run: cargo test
+
+  fuzz:
+    needs: check
+    name: Fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install minimal nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Fuzz
+        run: |
+          for target in $(cargo fuzz list); do
+            cargo fuzz run "$target" -- -runs=10000
+          done

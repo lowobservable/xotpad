@@ -5,7 +5,7 @@ use libfuzzer_sys::fuzz_target;
 
 extern crate xotpad;
 
-use xotpad::x25::X25Packet;
+use xotpad::x25::packet::X25Packet;
 
 fuzz_target!(|data: &[u8]| {
     let buf = Bytes::copy_from_slice(data);
