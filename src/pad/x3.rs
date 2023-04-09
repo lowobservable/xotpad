@@ -5,6 +5,8 @@ pub struct X3Params {
     pub echo: bool,
 
     pub forward: u8,
+
+    pub idle: u8,
 }
 
 impl X3Params {
@@ -12,6 +14,7 @@ impl X3Params {
         match param {
             2 => Some(u8::from(self.echo)),
             3 => Some(self.forward),
+            4 => Some(self.idle),
             _ => None,
         }
     }
@@ -26,6 +29,7 @@ impl X3Params {
                 }
             }
             3 => self.forward = value,
+            4 => self.idle = value,
             _ => return Err("unsupported parameter".into()),
         };
 

@@ -103,6 +103,7 @@ fn load_config(args: &Args) -> (X25Params, XotResolver, X3Params) {
     let x3_params = X3Params {
         echo: true,
         forward: 2,
+        idle: 0,
     };
 
     (x25_params, resolver, x3_params)

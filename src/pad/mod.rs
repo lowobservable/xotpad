@@ -2,10 +2,12 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::io::{self, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::ops::{Add, Sub};
 use std::str::{self, FromStr};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 use tracing_mutex::stdsync::TracingMutex;
 
 use crate::x121::X121Addr;
@@ -40,6 +42,7 @@ enum PadInput {
     Call,
     Network(io::Result<Option<(Bytes, bool)>>),
     User(io::Result<Option<u8>>),
+    TimeOut,
 }
 
 pub fn run(
@@ -149,6 +152,7 @@ pub fn run(
 
     let mut command_buf = BytesMut::with_capacity(128);
     let mut data_buf = BytesMut::with_capacity(128);
+    let mut last_data_time = None;
 
     let user_x3_params = x3_params.clone();
     let mut current_x3_params = x3_params.clone();
@@ -158,7 +162,14 @@ pub fn run(
         io::stdout().flush()?;
     }
 
-    for input in rx {
+    let mut timeout = None;
+
+    loop {
+        let input = match recv_input(&rx, timeout) {
+            Some(input) => input,
+            None => break,
+        };
+
         let mut current_call = current_call.lock().unwrap();
 
         match input {
@@ -173,8 +184,6 @@ pub fn run(
             }
             PadInput::Network(Ok(Some((buf, true)))) => {
                 let message = X29PadMessage::decode(buf);
-
-                dbg!(&message);
 
                 match message {
                     Ok(X29PadMessage::Set(ref params)) => {
@@ -339,6 +348,8 @@ pub fn run(
                     if command_buf.is_empty() && current_call.is_some() {
                         let (svc, x25_params) = current_call.as_ref().unwrap();
 
+                        last_data_time = Some(Instant::now());
+
                         queue_and_send_data_if_ready(
                             svc,
                             x25_params,
@@ -366,6 +377,8 @@ pub fn run(
 
                     let (svc, x25_params) = current_call.as_ref().unwrap();
 
+                    last_data_time = Some(Instant::now());
+
                     queue_and_send_data_if_ready(
                         svc,
                         x25_params,
@@ -375,7 +388,19 @@ pub fn run(
                     )?;
                 }
             },
+            PadInput::TimeOut => {
+                let (svc, _) = current_call.as_ref().unwrap();
+
+                send_data(svc, &mut data_buf)?;
+            }
         }
+
+        //
+        if data_buf.is_empty() {
+            last_data_time = None;
+        }
+
+        timeout = calculate_input_timeout(&current_x3_params, &last_data_time);
 
         io::stdout().flush()?;
     }
@@ -387,6 +412,31 @@ pub fn run(
     Ok(())
 }
 
+fn calculate_input_timeout(
+    x3_params: &X3Params,
+    last_data_time: &Option<Instant>,
+) -> Option<Duration> {
+    if x3_params.idle == 0 {
+        return None;
+    }
+
+    if last_data_time.is_none() {
+        return None;
+    }
+
+    let delay = Duration::from_millis(u64::from(x3_params.idle) * 50);
+
+    let deadline = last_data_time.unwrap().add(delay);
+
+    let now = Instant::now();
+
+    if deadline >= now {
+        return Some(deadline.sub(now));
+    }
+
+    Some(Duration::ZERO)
+}
+
 fn queue_and_send_data_if_ready(
     svc: &Svc,
     x25_params: &X25Params,
@@ -396,19 +446,14 @@ fn queue_and_send_data_if_ready(
 ) -> io::Result<()> {
     buf.put_u8(byte);
 
-    send_data_if_ready(svc, x25_params, x3_params, buf)
-}
-
-fn send_data_if_ready(
-    svc: &Svc,
-    x25_params: &X25Params,
-    x3_params: &X3Params,
-    buf: &mut BytesMut,
-) -> io::Result<()> {
     if !should_send_data(buf, x25_params, x3_params) {
         return Ok(());
     }
 
+    send_data(svc, buf)
+}
+
+fn send_data(svc: &Svc, buf: &mut BytesMut) -> io::Result<()> {
     let user_data = buf.split();
 
     svc.send(user_data.into(), false)
@@ -592,6 +637,21 @@ fn x29_set_read(
     message.encode(&mut buf);
 
     svc.send(buf.into(), true)
+}
+
+fn recv_input(channel: &Receiver<PadInput>, timeout: Option<Duration>) -> Option<PadInput> {
+    if let Some(timeout) = timeout {
+        return match channel.recv_timeout(timeout) {
+            Ok(input) => Some(input),
+            Err(RecvTimeoutError::Timeout) => Some(PadInput::TimeOut),
+            Err(RecvTimeoutError::Disconnected) => None,
+        };
+    }
+
+    match channel.recv() {
+        Ok(input) => Some(input),
+        Err(_) => None,
+    }
 }
 
 #[cfg(fuzzing)]
