@@ -389,9 +389,11 @@ pub fn run(
                 }
             },
             PadInput::TimeOut => {
-                let (svc, _) = current_call.as_ref().unwrap();
+                if !data_buf.is_empty() {
+                    let (svc, _) = current_call.as_ref().unwrap();
 
-                send_data(svc, &mut data_buf)?;
+                    send_data(svc, &mut data_buf)?;
+                }
             }
         }
 
@@ -454,6 +456,8 @@ fn queue_and_send_data_if_ready(
 }
 
 fn send_data(svc: &Svc, buf: &mut BytesMut) -> io::Result<()> {
+    assert!(!buf.is_empty());
+
     let user_data = buf.split();
 
     svc.send(user_data.into(), false)
