@@ -41,7 +41,7 @@ enum PadUserState {
 enum PadInput {
     Call,
     Network(io::Result<Option<(Bytes, bool)>>),
-    User(io::Result<Option<u8>>),
+    User(io::Result<Option<(u8, Instant)>>),
     TimeOut,
 }
 
@@ -66,7 +66,9 @@ pub fn run(
             for byte in reader.bytes() {
                 let should_continue = byte.is_ok();
 
-                if tx.send(PadInput::User(byte.map(Some))).is_err() {
+                let input = byte.map(|b| Some((b, Instant::now())));
+
+                if tx.send(PadInput::User(input)).is_err() {
                     break;
                 }
 
@@ -263,7 +265,7 @@ pub fn run(
                 println!("we probably need to wait for all data to be sent...");
                 println!("then shut down cleanly.");
             }
-            PadInput::User(Ok(Some(byte))) => match (user_state, byte) {
+            PadInput::User(Ok(Some((byte, input_time)))) => match (user_state, byte) {
                 (PadUserState::Command, /* Enter */ 0x0d) => {
                     let buf = command_buf.split();
 
@@ -348,7 +350,7 @@ pub fn run(
                     if command_buf.is_empty() && current_call.is_some() {
                         let (svc, x25_params) = current_call.as_ref().unwrap();
 
-                        last_data_time = Some(Instant::now());
+                        last_data_time = Some(input_time);
 
                         queue_and_send_data_if_ready(
                             svc,
@@ -377,7 +379,7 @@ pub fn run(
 
                     let (svc, x25_params) = current_call.as_ref().unwrap();
 
-                    last_data_time = Some(Instant::now());
+                    last_data_time = Some(input_time);
 
                     queue_and_send_data_if_ready(
                         svc,
