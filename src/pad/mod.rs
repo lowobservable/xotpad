@@ -389,20 +389,32 @@ pub fn run(
                 }
             },
             PadInput::TimeOut => {
-                if !data_buf.is_empty() {
+                // Idle input timeout will be handled below.
+            }
+        }
+
+        // Send data if the idle timeout has expired, otherwise set the input
+        // timeout.
+        timeout = None;
+
+        if let Some(delay) = get_idle_delay(&current_x3_params) {
+            if !data_buf.is_empty() {
+                let now = Instant::now();
+                let deadline = last_data_time.unwrap().add(delay);
+
+                if now >= deadline {
                     let (svc, _) = current_call.as_ref().unwrap();
 
                     send_data(svc, &mut data_buf)?;
+                } else {
+                    timeout = Some(deadline.sub(now));
                 }
             }
         }
 
-        //
         if data_buf.is_empty() {
             last_data_time = None;
         }
-
-        timeout = calculate_input_timeout(&current_x3_params, &last_data_time);
 
         io::stdout().flush()?;
     }
@@ -414,29 +426,14 @@ pub fn run(
     Ok(())
 }
 
-fn calculate_input_timeout(
-    x3_params: &X3Params,
-    last_data_time: &Option<Instant>,
-) -> Option<Duration> {
+fn get_idle_delay(x3_params: &X3Params) -> Option<Duration> {
     if x3_params.idle == 0 {
-        return None;
-    }
-
-    if last_data_time.is_none() {
         return None;
     }
 
     let delay = Duration::from_millis(u64::from(x3_params.idle) * 50);
 
-    let deadline = last_data_time.unwrap().add(delay);
-
-    let now = Instant::now();
-
-    if deadline >= now {
-        return Some(deadline.sub(now));
-    }
-
-    Some(Duration::ZERO)
+    Some(delay)
 }
 
 fn queue_and_send_data_if_ready(

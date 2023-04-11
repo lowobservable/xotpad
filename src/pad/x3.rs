@@ -1,4 +1,4 @@
-pub const PARAMS: [u8; 2] = [2, 3];
+pub const PARAMS: [u8; 3] = [2, 3, 4];
 
 #[derive(Clone, Debug)]
 pub struct X3Params {
