@@ -81,5 +81,47 @@ jobs:
       - name: Fuzz
         run: |
           for target in $(cargo fuzz list); do
-            cargo fuzz run "$target" -- -runs=10000
+            cargo fuzz run "$target" -- -runs=1000
           done
+
+  build:
+    needs: [test, fuzz]
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: ""
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            suffix: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: .exe
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install minimal toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - name: Build
+        run: cargo build --release --target "${{ matrix.target }}"
+      - name: Package
+        run: |
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/xotpad${{ matrix.suffix }}" dist
+          cp README.md dist
+          cp LICENSE dist
+      - name: Upload
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
