@@ -3,7 +3,8 @@ use std::io;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use xotpad::pad::{self, X3Params};
+use xotpad::pad;
+use xotpad::pad::x3::{X3Echo, X3Forward, X3Idle, X3Params};
 use xotpad::x121::X121Addr;
 use xotpad::x25::{X25Modulo, X25Params};
 use xotpad::xot::{self, XotResolver};
@@ -101,9 +102,9 @@ fn load_config(args: &Args) -> (X25Params, XotResolver, X3Params) {
     }
 
     let x3_params = X3Params {
-        echo: true,
-        forward: 2,
-        idle: 0,
+        echo: X3Echo::try_from(0).unwrap(),
+        forward: X3Forward::try_from(2).unwrap(),
+        idle: X3Idle::from(0),
     };
 
     (x25_params, resolver, x3_params)

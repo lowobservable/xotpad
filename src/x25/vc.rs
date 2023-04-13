@@ -463,8 +463,6 @@ impl VcInner {
     }
 
     fn run(&self, mut recv_link: XotLink, barrier: &Arc<Barrier>) {
-        println!("VC engine starting...");
-
         // Create another thread that reads packets, this allows the main loop
         // wait to be interrupted while the XOT socket read is blocked.
         let recv_queue = Arc::new(TracingMutex::new(VecDeque::<io::Result<Bytes>>::new()));
@@ -473,21 +471,17 @@ impl VcInner {
             let recv_queue = Arc::clone(&recv_queue);
             let engine_wait = Arc::clone(&self.engine_wait);
 
-            move || {
-                loop {
-                    let packet = recv_link.recv();
+            move || loop {
+                let packet = recv_link.recv();
 
-                    let is_err = packet.is_err();
+                let is_err = packet.is_err();
 
-                    recv_queue.lock().unwrap().push_back(packet);
-                    engine_wait.notify_all();
+                recv_queue.lock().unwrap().push_back(packet);
+                engine_wait.notify_all();
 
-                    if is_err {
-                        break;
-                    }
+                if is_err {
+                    break;
                 }
-
-                println!("recv link done!");
             }
         });
 
@@ -734,8 +728,6 @@ impl VcInner {
                 (recv_queue, _) = self.engine_wait.wait_timeout(recv_queue, timeout).unwrap();
             }
         }
-
-        println!("VC engine done!");
     }
 
     fn data_transfer(&self, state: &mut VcState) {

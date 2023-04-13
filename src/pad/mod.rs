@@ -16,12 +16,11 @@ use crate::xot::{self, XotLink, XotResolver};
 
 use self::x28::X28Command;
 use self::x29::X29PadMessage;
+use self::x3::X3Params;
 
 mod x28;
 mod x29;
-mod x3;
-
-pub use self::x3::X3Params;
+pub mod x3;
 
 pub fn call(addr: &X121Addr, x25_params: &X25Params, resolver: &XotResolver) -> io::Result<Svc> {
     let xot_link = xot::connect(addr, resolver)?;
@@ -167,9 +166,8 @@ pub fn run(
     let mut timeout = None;
 
     loop {
-        let input = match recv_input(&rx, timeout) {
-            Some(input) => input,
-            None => break,
+        let Some(input) = recv_input(&rx, timeout) else {
+            break;
         };
 
         let mut current_call = current_call.lock().unwrap();
@@ -373,7 +371,7 @@ pub fn run(
                     ensure_command(&mut user_state);
                 }
                 (PadUserState::Data, byte) => {
-                    if current_x3_params.echo {
+                    if current_x3_params.echo.into() {
                         io::stdout().write_all(&[byte])?;
                     }
 
@@ -399,7 +397,7 @@ pub fn run(
         // timeout.
         timeout = None;
 
-        if let Some(delay) = get_idle_delay(&current_x3_params) {
+        if let Some(delay) = current_x3_params.idle.into() {
             if !data_buf.is_empty() {
                 let now = Instant::now();
                 let deadline = last_data_time.unwrap().add(delay);
@@ -426,16 +424,6 @@ pub fn run(
     disable_raw_mode()?;
 
     Ok(())
-}
-
-fn get_idle_delay(x3_params: &X3Params) -> Option<Duration> {
-    if x3_params.idle == 0 {
-        return None;
-    }
-
-    let delay = Duration::from_millis(u64::from(x3_params.idle) * 50);
-
-    Some(delay)
 }
 
 fn queue_and_send_data_if_ready(
@@ -471,50 +459,9 @@ fn should_send_data(buf: &BytesMut, x25_params: &X25Params, x3_params: &X3Params
         return true;
     }
 
-    let forward = x3_params.forward;
     let last_byte = *buf.last().unwrap();
 
-    if forward & 1 == 1 && last_byte.is_ascii_alphanumeric() {
-        return true;
-    }
-
-    // CR (0x0d)
-    if forward & 2 == 2 && last_byte == 0x0d {
-        return true;
-    }
-
-    // ESC (0x1b) BEL (0x07) ENQ (0x05) ACK (0x06)
-    if forward & 4 == 4 && [0x1b, 0x07, 0x05, 0x06].contains(&last_byte) {
-        return true;
-    }
-
-    // DEL (0x7f), CAN (0x18), DC2 (0x12)
-    if forward & 8 == 8 && [0x7f, 0x18, 0x12].contains(&last_byte) {
-        return true;
-    }
-
-    // EOT (0x04), ETX (0x03)
-    if forward & 16 == 16 && [0x04, 0x03].contains(&last_byte) {
-        return true;
-    }
-
-    // HT (0x09), LF (0x0a), VT (0x0b), FF (0x0c)
-    if forward & 32 == 32 && [0x09, 0x0a, 0x0b, 0x0c].contains(&last_byte) {
-        return true;
-    }
-
-    // Everything else from IA5 columns 0 and 1...
-    if forward & 64 == 64
-        && [
-            0x00, 0x01, 0x02, 0x08, 0x0e, 0x0f, 0x10, 0x11, 0x13, 0x14, 0x15, 0x16, 0x17, 0x19,
-            0x1a, 0x1c, 0x1d, 0x1e, 0x1f,
-        ]
-        .contains(&last_byte)
-    {
-        return true;
-    }
-
-    false
+    x3_params.forward.is_match(last_byte)
 }
 
 fn ensure_command(state: &mut PadUserState) {
