@@ -15,7 +15,7 @@ fn main() -> io::Result<()> {
     let (x25_params, resolver, x3_params) = load_config(&args);
 
     let listener = if args.should_listen {
-        if let Ok(listener) = TcpListener::bind(("0.0.0.0", xot::TCP_PORT)) {
+        if let Ok(listener) = TcpListener::bind((args.xot_bind_addr, xot::TCP_PORT)) {
             Some(listener)
         } else {
             println!("unable to bind... will not listen!");
@@ -41,37 +41,28 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-// -a address
-// -g gateway
-// -G bind
 // -P X.25 profile
 // -p X.3 profile
 #[derive(Parser, Debug)]
 struct Args {
-    #[arg(
-        short = 'a',
-        value_name = "ADDRESS",
-        env = "X121_ADDRESS",
-        help = "Local X.121 address"
-    )]
+    /// Local X.121 address.
+    #[arg(short = 'a', value_name = "ADDRESS")]
     local_addr: Option<X121Addr>,
 
-    #[arg(
-        short = 'g',
-        value_name = "GATEWAY",
-        env = "XOT_GATEWAY",
-        help = "XOT gateway"
-    )]
+    /// XOT gateway.
+    #[arg(short = 'g', value_name = "GATEWAY")]
     xot_gateway: Option<String>,
 
-    #[arg(short = 'L', help = "Listen for incoming calls")]
+    /// Bind address for incoming XOT connections.
+    #[arg(short = 'G', value_name = "ADDRESS", default_value = "0.0.0.0")]
+    xot_bind_addr: String,
+
+    /// Listen for incoming calls.
+    #[arg(short = 'L')]
     should_listen: bool,
 
-    #[arg(
-        conflicts_with = "should_listen",
-        value_name = "ADDRESS",
-        help = "X.121 address to call"
-    )]
+    /// X.121 address to call.
+    #[arg(value_name = "ADDRESS", conflicts_with = "should_listen")]
     call_addr: Option<X121Addr>,
 }
 
