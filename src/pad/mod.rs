@@ -1,5 +1,6 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::ops::{Add, Sub};
@@ -44,12 +45,18 @@ enum PadInput {
     TimeOut,
 }
 
-pub fn run(
+pub fn run_host_pad(/* in, out */ x3_params: &X3Params, svc: Svc) {
+    todo!();
+}
+
+pub fn run_user_pad(
+    // in, out
     x25_params: &X25Params,
+    x3_profiles: &HashMap<&str, X3Params>,
     resolver: &XotResolver,
     tcp_listener: Option<TcpListener>,
     svc: Option<Svc>,
-    x3_params: &X3Params,
+    x3_profile: &str,
 ) -> io::Result<()> {
     let (tx, rx) = channel();
 
@@ -155,8 +162,8 @@ pub fn run(
     let mut data_buf = BytesMut::with_capacity(128);
     let mut last_data_time = None;
 
-    let user_x3_params = x3_params.clone();
-    let mut current_x3_params = x3_params.clone();
+    let user_x3_params = x3_profiles.get(x3_profile).expect("unknown X.3 profile");
+    let mut current_x3_params = user_x3_params.clone();
 
     if user_state == PadUserState::Command {
         print!("*");
@@ -189,7 +196,7 @@ pub fn run(
                     Ok(X29PadMessage::Set(ref params)) => {
                         let (svc, _) = current_call.as_ref().unwrap();
 
-                        x29_set(svc, &mut current_x3_params, params, &user_x3_params)?;
+                        x29_set(svc, &mut current_x3_params, params, user_x3_params)?;
                     }
                     Ok(X29PadMessage::Read(ref params)) => {
                         let (svc, _) = current_call.as_ref().unwrap();
@@ -199,7 +206,7 @@ pub fn run(
                     Ok(X29PadMessage::SetRead(ref params)) => {
                         let (svc, _) = current_call.as_ref().unwrap();
 
-                        x29_set_read(svc, &mut current_x3_params, params, &user_x3_params)?;
+                        x29_set_read(svc, &mut current_x3_params, params, user_x3_params)?;
                     }
                     Ok(X29PadMessage::Indicate(_)) => todo!("XXX"),
                     Ok(X29PadMessage::ClearInvitation) => {

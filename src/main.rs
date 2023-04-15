@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::collections::HashMap;
 use std::io;
 use std::net::TcpListener;
 use std::time::Duration;
@@ -12,10 +13,10 @@ use xotpad::xot::{self, XotResolver};
 fn main() -> io::Result<()> {
     let args = Args::parse();
 
-    let (x25_params, resolver, x3_params) = load_config(&args);
+    let (x25_params, resolver, x3_profiles, x3_profile) = load_config(&args);
 
     let listener = if args.should_listen {
-        if let Ok(listener) = TcpListener::bind((args.xot_bind_addr, xot::TCP_PORT)) {
+        if let Ok(listener) = TcpListener::bind((args.xot_bind_addr.as_str(), xot::TCP_PORT)) {
             Some(listener)
         } else {
             println!("unable to bind... will not listen!");
@@ -25,8 +26,8 @@ fn main() -> io::Result<()> {
         None
     };
 
-    let svc = if let Some(addr) = args.call_addr {
-        match pad::call(&addr, &x25_params, &resolver) {
+    let svc = if let Some(addr) = &args.call_addr {
+        match pad::call(addr, &x25_params, &resolver) {
             Ok(svc) => Some(svc),
             Err(err) => {
                 return Err(io::Error::new(io::ErrorKind::Other, err));
@@ -36,7 +37,14 @@ fn main() -> io::Result<()> {
         None
     };
 
-    pad::run(&x25_params, &resolver, listener, svc, &x3_params)?;
+    pad::run_user_pad(
+        &x25_params,
+        &x3_profiles,
+        &resolver,
+        listener,
+        svc,
+        x3_profile,
+    )?;
 
     Ok(())
 }
@@ -61,12 +69,16 @@ struct Args {
     #[arg(short = 'L')]
     should_listen: bool,
 
+    /// X.3 profile.
+    #[arg(short = 'p', value_name = "PROFILE", default_value = "default")]
+    x3_profile: String,
+
     /// X.121 address to call.
     #[arg(value_name = "ADDRESS", conflicts_with = "should_listen")]
     call_addr: Option<X121Addr>,
 }
 
-fn load_config(args: &Args) -> (X25Params, XotResolver, X3Params) {
+fn load_config(args: &Args) -> (X25Params, XotResolver, HashMap<&str, X3Params>, &str) {
     let addr = match args.local_addr {
         Some(ref local_addr) => local_addr.clone(),
         None => X121Addr::null(),
@@ -92,11 +104,24 @@ fn load_config(args: &Args) -> (X25Params, XotResolver, X3Params) {
         let _ = resolver.add("^(...)(...)..", "\\2.\\1.x25.org");
     }
 
-    let x3_params = X3Params {
-        echo: X3Echo::try_from(0).unwrap(),
-        forward: X3Forward::try_from(2).unwrap(),
-        idle: X3Idle::from(0),
-    };
+    let mut x3_profiles = HashMap::new();
 
-    (x25_params, resolver, x3_params)
+    // TODO...
+    x3_profiles.insert(
+        "default",
+        X3Params {
+            echo: X3Echo::try_from(0).unwrap(),
+            forward: X3Forward::try_from(2).unwrap(),
+            idle: X3Idle::from(0),
+        },
+    );
+
+    // TODO...
+    let x3_profile = args.x3_profile.as_str();
+
+    if !x3_profiles.contains_key(x3_profile) {
+        panic!("uuuh that X.3 profile does not exist!");
+    }
+
+    (x25_params, resolver, x3_profiles, x3_profile)
 }
