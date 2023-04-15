@@ -224,10 +224,7 @@ pub fn run_user_pad(
                 }
             }
             PadInput::Network(Ok(Some((buf, false)))) => {
-                let mut out = io::stdout().lock();
-
-                out.write_all(&buf)?;
-                out.flush()?;
+                io::stdout().write_all(&buf)?;
             }
             PadInput::Network(Ok(None)) => {
                 // XXX: we can tell whether we should show anything or not, based
@@ -259,8 +256,6 @@ pub fn run_user_pad(
                 ensure_command(&mut user_state);
             }
             PadInput::User(Ok(None) | Err(_)) => {
-                println!("here");
-
                 if current_call.is_none() {
                     break;
                 }
@@ -336,7 +331,6 @@ pub fn run_user_pad(
                         user_state = PadUserState::Data;
                     } else {
                         print!("*");
-                        io::stdout().flush()?;
                     }
                 }
                 (PadUserState::Command, /* Ctrl+C */ 0x03) => {
