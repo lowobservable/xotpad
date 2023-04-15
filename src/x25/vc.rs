@@ -30,6 +30,8 @@ pub trait Vc {
     fn recv(&self) -> io::Result<Option<(Bytes, bool)>>;
 
     fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()>;
+
+    fn is_connected(&self) -> bool;
 }
 
 #[derive(Debug)]
@@ -44,6 +46,15 @@ enum VcState {
     Called(X25CallRequest),
     Cleared(ClearInitiator, Option<X25ClearConfirm>),
     OutOfOrder,
+}
+
+impl VcState {
+    fn is_connected(&self) -> bool {
+        matches!(
+            self,
+            VcState::DataTransfer(_) | VcState::WaitResetConfirm(_)
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -105,23 +116,30 @@ impl Svc {
                 state = inner.state.1.wait(state).unwrap();
             }
 
-            match *state {
-                VcState::DataTransfer(_) => { /* This is the expected state */ }
-                VcState::Cleared(ClearInitiator::Remote(ref clear_request), _) => {
-                    let X25ClearRequest {
-                        cause,
-                        diagnostic_code,
-                        ..
-                    } = clear_request;
-                    let msg = format!("C:{cause} D:{diagnostic_code}");
-                    return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
+            // Consider the call a success if there is any data, irrespective of
+            // the current state. If the remote party sends data and immediately
+            // sends a clear request, then the call may already be cleared but
+            // the data will be lost if we don't return the call to the client.
+            let queue = inner.recv_data_queue.0.lock().unwrap();
+
+            if queue.is_empty() && !state.is_connected() {
+                match *state {
+                    VcState::Cleared(ClearInitiator::Remote(ref clear_request), _) => {
+                        let X25ClearRequest {
+                            cause,
+                            diagnostic_code,
+                            ..
+                        } = clear_request;
+                        let msg = format!("C:{cause} D:{diagnostic_code}");
+                        return Err(io::Error::new(io::ErrorKind::ConnectionReset, msg));
+                    }
+                    VcState::WaitClearConfirm(_, ClearInitiator::TimeOut(_))
+                    | VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
+                        return Err(io::Error::from(io::ErrorKind::TimedOut));
+                    }
+                    VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
+                    _ => panic!("unexpected state"),
                 }
-                VcState::WaitClearConfirm(_, ClearInitiator::TimeOut(_))
-                | VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
-                    return Err(io::Error::from(io::ErrorKind::TimedOut));
-                }
-                VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
-                _ => panic!("unexpected state"),
             }
         }
 
@@ -158,10 +176,7 @@ impl Svc {
             {
                 let mut state = inner.state.0.lock().unwrap();
 
-                if !matches!(
-                    *state,
-                    VcState::DataTransfer(_) | VcState::WaitResetConfirm(_)
-                ) {
+                if !state.is_connected() {
                     // TODO: what about if the state was cleared by the peer?
                     // is that an error... we don't get to clear with OUR cause...
                     todo!("invalid state");
@@ -319,7 +334,9 @@ impl Vc for Svc {
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
         let inner = &self.0;
 
-        // TODO: check we are connected
+        if !self.is_connected() {
+            todo!("invalid state");
+        }
 
         let packet_size = inner.params.read().unwrap().send_packet_size;
 
@@ -339,6 +356,7 @@ impl Vc for Svc {
             }
         }
 
+        // TODO: should we send here? or just wake up the engine and let it try?
         {
             let mut state = inner.state.0.lock().unwrap();
 
@@ -367,16 +385,17 @@ impl Vc for Svc {
                 return Ok(Some(data));
             }
 
-            match *state {
-                VcState::DataTransfer(_) => { /* Try again */ }
-                VcState::Cleared(ClearInitiator::Local | ClearInitiator::Remote(_), _) => {
-                    return Ok(None);
+            if !state.is_connected() {
+                match *state {
+                    VcState::Cleared(ClearInitiator::Local | ClearInitiator::Remote(_), _) => {
+                        return Ok(None);
+                    }
+                    VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
+                        return Err(io::Error::from(io::ErrorKind::TimedOut));
+                    }
+                    VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
+                    _ => panic!("unexpected state"),
                 }
-                VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
-                    return Err(io::Error::from(io::ErrorKind::TimedOut));
-                }
-                VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
-                _ => panic!("unexpected state"),
             }
 
             drop(state);
@@ -420,6 +439,12 @@ impl Vc for Svc {
         };
 
         Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        let state = self.0.state.0.lock().unwrap();
+
+        state.is_connected()
     }
 }
 
