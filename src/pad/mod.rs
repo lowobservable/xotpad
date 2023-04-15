@@ -50,13 +50,12 @@ pub fn run_host_pad(/* in, out */ x3_params: &X3Params, svc: Svc) {
 }
 
 pub fn run_user_pad(
-    // in, out
     x25_params: &X25Params,
     x3_profiles: &HashMap<&str, X3Params>,
     resolver: &XotResolver,
+    x3_profile: &str,
     tcp_listener: Option<TcpListener>,
     svc: Option<Svc>,
-    x3_profile: &str,
 ) -> io::Result<()> {
     let (tx, rx) = channel();
 
