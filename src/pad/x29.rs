@@ -19,6 +19,11 @@ impl X29PadMessage {
 
                 1 + len
             }
+            X29PadMessage::ClearInvitation => {
+                buf.put_u8(0x01);
+
+                1
+            }
             _ => unimplemented!(),
         }
     }

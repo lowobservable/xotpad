@@ -23,13 +23,15 @@ use crate::xot::XotLink;
 
 /// X.25 virtual circuit.
 pub trait Vc {
-    fn params(&self) -> X25Params;
-
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()>;
 
     fn recv(&self) -> io::Result<Option<(Bytes, bool)>>;
 
     fn reset(&self, cause: u8, diagnostic_code: u8) -> io::Result<()>;
+
+    fn flush(&self) -> io::Result<()>;
+
+    fn params(&self) -> X25Params;
 
     fn is_connected(&self) -> bool;
 }
@@ -327,10 +329,6 @@ impl SvcIncomingCall {
 }
 
 impl Vc for Svc {
-    fn params(&self) -> X25Params {
-        self.0.params.read().unwrap().clone()
-    }
-
     fn send(&self, user_data: Bytes, qualifier: bool) -> io::Result<()> {
         let inner = &self.0;
 
@@ -439,6 +437,44 @@ impl Vc for Svc {
         };
 
         Ok(())
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        let inner = &self.0;
+
+        loop {
+            // NOTE: state and send_data_queue lock acquisition order is important
+            // to avoid deadlock.
+            let state = inner.state.0.lock().unwrap();
+
+            let queue = inner.send_data_queue.0.lock().unwrap();
+
+            if queue.is_empty() {
+                return Ok(());
+            }
+
+            if !state.is_connected() {
+                match *state {
+                    VcState::Cleared(ClearInitiator::Local | ClearInitiator::Remote(_), _) => {
+                        todo!("what error is this?");
+                    }
+                    VcState::Cleared(ClearInitiator::TimeOut(_), _) => {
+                        return Err(io::Error::from(io::ErrorKind::TimedOut));
+                    }
+                    VcState::OutOfOrder => return Err(to_other_io_error("link is out of order")),
+                    _ => panic!("unexpected state"),
+                }
+            }
+
+            drop(state);
+
+            // this will drop the lock on the queue, we'll reaquire above
+            let _ = inner.send_data_queue.1.wait(queue).unwrap();
+        }
+    }
+
+    fn params(&self) -> X25Params {
+        self.0.params.read().unwrap().clone()
     }
 
     fn is_connected(&self) -> bool {

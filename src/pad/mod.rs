@@ -45,7 +45,7 @@ enum PadInput {
     TimeOut,
 }
 
-pub fn run_host_pad(/* in, out */ x3_params: &X3Params, svc: Svc) {
+pub fn run_host_pad(/* pty: Pty */ x3_params: &X3Params, svc: Svc) {
     todo!();
 }
 
@@ -83,8 +83,6 @@ pub fn run_user_pad(
             }
 
             let _ = tx.send(PadInput::User(Ok(None)));
-
-            println!("done with user input thread");
         }
     });
 
@@ -152,8 +150,6 @@ pub fn run_user_pad(
                     break;
                 }
             }
-
-            println!("done with listener thread");
         });
     }
 
@@ -209,10 +205,12 @@ pub fn run_user_pad(
                     }
                     Ok(X29PadMessage::Indicate(_)) => todo!("XXX"),
                     Ok(X29PadMessage::ClearInvitation) => {
-                        // TODO: we should attempt to send all that we have before
-                        // clearing...
+                        let (svc, _) = current_call.take().unwrap();
 
-                        current_call.take().unwrap().0.clear(0, 0)?;
+                        svc.flush()?;
+                        svc.clear(0, 0)?;
+
+                        print!("\r\nSHOULD WE SHOW SOMETHING HERE?\r\n");
 
                         if is_one_shot {
                             break;
@@ -256,13 +254,10 @@ pub fn run_user_pad(
                 ensure_command(&mut user_state);
             }
             PadInput::User(Ok(None) | Err(_)) => {
-                if current_call.is_none() {
-                    break;
+                if let Some((svc, _)) = current_call.take() {
+                    svc.flush()?;
+                    svc.clear(0, 0)?; // TODO
                 }
-
-                println!("not really sure what to do here yet...");
-                println!("we probably need to wait for all data to be sent...");
-                println!("then shut down cleanly.");
             }
             PadInput::User(Ok(Some((byte, input_time)))) => match (user_state, byte) {
                 (PadUserState::Command, /* Enter */ 0x0d) => {
@@ -276,7 +271,7 @@ pub fn run_user_pad(
                         let command = X28Command::from_str(line);
 
                         match command {
-                            Ok(X28Command::Call(ref addr)) => {
+                            Ok(X28Command::Selection(ref addr)) => {
                                 if current_call.is_some() {
                                     print!("ERROR... ENGAGED!\r\n");
                                 } else {
@@ -296,9 +291,9 @@ pub fn run_user_pad(
                                     }
                                 }
                             }
-                            Ok(X28Command::Clear) => {
-                                if current_call.is_some() {
-                                    current_call.take().unwrap().0.clear(0, 0)?;
+                            Ok(X28Command::ClearRequest) => {
+                                if let Some((svc, _)) = current_call.take() {
+                                    svc.clear(0, 0)?;
                                 } else {
                                     print!("ERROR... NOT CONNECTED!\r\n");
                                 }
@@ -314,9 +309,16 @@ pub fn run_user_pad(
                                     print!("FREE\r\n");
                                 }
                             }
+                            Ok(X28Command::ClearInvitation) => {
+                                if let Some((svc, _)) = current_call.as_ref() {
+                                    x29_clear_invitation(svc)?;
+                                } else {
+                                    print!("ERROR... NOT CONNECTED!\r\n");
+                                }
+                            }
                             Ok(X28Command::Exit) => {
-                                if current_call.is_some() {
-                                    current_call.take().unwrap().0.clear(0, 0)?;
+                                if let Some((svc, _)) = current_call.take() {
+                                    svc.clear(0, 0)?;
                                 }
 
                                 break;
@@ -335,8 +337,8 @@ pub fn run_user_pad(
                 }
                 (PadUserState::Command, /* Ctrl+C */ 0x03) => {
                     if command_buf.is_empty() {
-                        if current_call.is_some() {
-                            current_call.take().unwrap().0.clear(0, 0)?;
+                        if let Some((svc, _)) = current_call.take() {
+                            svc.clear(0, 0)?;
                         }
 
                         break;
@@ -442,14 +444,6 @@ fn queue_and_send_data_if_ready(
     send_data(svc, buf)
 }
 
-fn send_data(svc: &Svc, buf: &mut BytesMut) -> io::Result<()> {
-    assert!(!buf.is_empty());
-
-    let user_data = buf.split();
-
-    svc.send(user_data.into(), false)
-}
-
 fn should_send_data(buf: &BytesMut, x25_params: &X25Params, x3_params: &X3Params) -> bool {
     if buf.is_empty() {
         return false;
@@ -462,6 +456,22 @@ fn should_send_data(buf: &BytesMut, x25_params: &X25Params, x3_params: &X3Params
     let last_byte = *buf.last().unwrap();
 
     x3_params.forward.is_match(last_byte)
+}
+
+fn send_data(svc: &Svc, buf: &mut BytesMut) -> io::Result<()> {
+    assert!(!buf.is_empty());
+
+    let user_data = buf.split();
+
+    svc.send(user_data.into(), false)
+}
+
+fn send_x29(svc: &Svc, message: X29PadMessage) -> io::Result<()> {
+    let mut buf = BytesMut::new();
+
+    message.encode(&mut buf);
+
+    svc.send(buf.into(), true)
 }
 
 fn ensure_command(state: &mut PadUserState) {
@@ -477,22 +487,18 @@ fn ensure_command(state: &mut PadUserState) {
 fn spawn_network_thread(svc: &Svc, channel: Sender<PadInput>) -> JoinHandle<()> {
     let svc = svc.clone();
 
-    thread::spawn(move || {
-        loop {
-            let result = svc.recv();
+    thread::spawn(move || loop {
+        let result = svc.recv();
 
-            let should_continue = matches!(result, Ok(Some(_)));
+        let should_continue = matches!(result, Ok(Some(_)));
 
-            if channel.send(PadInput::Network(result)).is_err() {
-                break;
-            }
-
-            if !should_continue {
-                break;
-            }
+        if channel.send(PadInput::Network(result)).is_err() {
+            break;
         }
 
-        println!("done with network input thread");
+        if !should_continue {
+            break;
+        }
     })
 }
 
@@ -508,13 +514,7 @@ fn x29_read(svc: &Svc, current_params: &X3Params, requested: &[u8]) -> io::Resul
         .map(|&p| (p, current_params.get(p).unwrap_or(0x81)))
         .collect();
 
-    let message = X29PadMessage::Indicate(params);
-
-    let mut buf = BytesMut::new();
-
-    message.encode(&mut buf);
-
-    svc.send(buf.into(), true)
+    send_x29(svc, X29PadMessage::Indicate(params))
 }
 
 fn x29_set(
@@ -545,13 +545,7 @@ fn x29_set(
         return Ok(());
     }
 
-    let message = X29PadMessage::Indicate(errors);
-
-    let mut buf = BytesMut::new();
-
-    message.encode(&mut buf);
-
-    svc.send(buf.into(), true)
+    send_x29(svc, X29PadMessage::Indicate(errors))
 }
 
 fn x29_set_read(
@@ -580,13 +574,11 @@ fn x29_set_read(
         })
         .collect();
 
-    let message = X29PadMessage::Indicate(params);
+    send_x29(svc, X29PadMessage::Indicate(params))
+}
 
-    let mut buf = BytesMut::new();
-
-    message.encode(&mut buf);
-
-    svc.send(buf.into(), true)
+fn x29_clear_invitation(svc: &Svc) -> io::Result<()> {
+    send_x29(svc, X29PadMessage::ClearInvitation)
 }
 
 fn recv_input(channel: &Receiver<PadInput>, timeout: Option<Duration>) -> Option<PadInput> {
