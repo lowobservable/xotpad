@@ -15,7 +15,7 @@ use crate::x121::X121Addr;
 use crate::x25::{Svc, Vc, X25Params};
 use crate::xot::{self, XotLink, XotResolver};
 
-use self::x28::X28Command;
+use self::x28::{format_params, X28Command};
 use self::x29::X29PadMessage;
 use self::x3::X3Params;
 
@@ -302,6 +302,9 @@ pub fn run_user_pad(
                                     break;
                                 }
                             }
+                            Ok(X28Command::Read(ref params)) => {
+                                x28_read(&current_x3_params, params);
+                            }
                             Ok(X28Command::Status) => {
                                 if current_call.is_some() {
                                     print!("ENGAGED\r\n");
@@ -579,6 +582,21 @@ fn x29_set_read(
 
 fn x29_clear_invitation(svc: &Svc) -> io::Result<()> {
     send_x29(svc, X29PadMessage::ClearInvitation)
+}
+
+fn x28_read(current_params: &X3Params, requested: &[u8]) {
+    let requested = if requested.is_empty() {
+        &x3::PARAMS
+    } else {
+        requested
+    };
+
+    let params: Vec<(u8, Option<u8>)> = requested
+        .iter()
+        .map(|&p| (p, current_params.get(p)))
+        .collect();
+
+    print!("PAR {}\r\n", format_params(&params));
 }
 
 fn recv_input(channel: &Receiver<PadInput>, timeout: Option<Duration>) -> Option<PadInput> {

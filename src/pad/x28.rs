@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::str::FromStr;
 
 use crate::x121::X121Addr;
@@ -6,6 +7,7 @@ use crate::x121::X121Addr;
 pub enum X28Command {
     Selection(X121Addr),
     ClearRequest,
+    Read(Vec<u8>),
     Status,
     ClearInvitation,
     Exit,
@@ -18,28 +20,62 @@ impl FromStr for X28Command {
         let pair: Vec<&str> = s.trim().splitn(2, ' ').collect();
 
         let command = pair[0].to_uppercase();
-        let rest = if pair.len() > 1 { Some(pair[1]) } else { None };
+        let rest = if pair.len() > 1 { pair[1] } else { "" };
 
         match &command[..] {
             "CALL" => {
-                let addr = rest.unwrap_or("").trim();
-
-                if addr.is_empty() {
+                if rest.is_empty() {
                     return Err("addr required, dude!".into());
                 }
 
-                match X121Addr::from_str(addr) {
+                match X121Addr::from_str(rest) {
                     Ok(addr) => Ok(X28Command::Selection(addr)),
                     Err(_) => Err("invalid addr".into()),
                 }
             }
             "CLR" | "CLEAR" => Ok(X28Command::ClearRequest),
+            "PAR?" | "PAR" | "PARAMETER" | "READ" => {
+                let params = parse_read_params(rest)?;
+
+                Ok(X28Command::Read(params))
+            }
             "STAT" | "STATUS" => Ok(X28Command::Status),
             "ICLR" | "ICLEAR" => Ok(X28Command::ClearInvitation),
             "EXIT" => Ok(X28Command::Exit),
             _ => Err("unrecognized command".into()),
         }
     }
+}
+
+// Cisco and RAD both implement subtly different handling of invalid input, this
+// is closer to the RAD implementation which is more straightforward to implement.
+fn parse_read_params(s: &str) -> Result<Vec<u8>, String> {
+    let s = s.trim();
+
+    if s.is_empty() {
+        return Ok(vec![]);
+    }
+
+    s.split(',')
+        .map(|p| u8::from_str(p.trim()).map_err(|_| "invalid param".into()))
+        .collect()
+}
+
+pub fn format_params(params: &[(u8, Option<u8>)]) -> String {
+    let mut s = String::new();
+
+    for &(param, value) in params {
+        if !s.is_empty() {
+            s.push_str(", ");
+        }
+
+        match value {
+            Some(value) => write!(&mut s, "{param}:{value}"),
+            None => write!(&mut s, "{param}:INV"),
+        };
+    }
+
+    s
 }
 
 #[cfg(test)]
@@ -63,6 +99,30 @@ mod tests {
     fn from_str_clear_request() {
         assert_eq!(X28Command::from_str("clr"), Ok(X28Command::ClearRequest));
         assert_eq!(X28Command::from_str("clear"), Ok(X28Command::ClearRequest));
+    }
+
+    #[test]
+    fn from_str_read() {
+        assert_eq!(X28Command::from_str("par?"), Ok(X28Command::Read(vec![])));
+        assert_eq!(
+            X28Command::from_str("par? 1"),
+            Ok(X28Command::Read(vec![1]))
+        );
+        assert_eq!(
+            X28Command::from_str("par? 1,2"),
+            Ok(X28Command::Read(vec![1, 2]))
+        );
+        assert_eq!(
+            X28Command::from_str("par? 1, 2"),
+            Ok(X28Command::Read(vec![1, 2]))
+        );
+    }
+
+    #[test]
+    fn from_str_read_invalid() {
+        assert!(X28Command::from_str("par? a").is_err());
+        assert!(X28Command::from_str("par? 1,a").is_err());
+        assert!(X28Command::from_str("par? ,").is_err());
     }
 
     #[test]
