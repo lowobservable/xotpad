@@ -305,6 +305,9 @@ pub fn run_user_pad(
                             Ok(X28Command::Read(ref params)) => {
                                 x28_read(&current_x3_params, params);
                             }
+                            Ok(X28Command::Set(ref params)) => {
+                                x28_set(&mut current_x3_params, params);
+                            }
                             Ok(X28Command::Status) => {
                                 if current_call.is_some() {
                                     print!("ENGAGED\r\n");
@@ -597,6 +600,14 @@ fn x28_read(current_params: &X3Params, requested: &[u8]) {
         .collect();
 
     print!("PAR {}\r\n", format_params(&params));
+}
+
+fn x28_set(current_params: &mut X3Params, requested: &[(u8, u8)]) {
+    for &(param, value) in requested {
+        if current_params.set(param, value).is_err() {
+            // TODO: do we tell the user?
+        }
+    }
 }
 
 fn recv_input(channel: &Receiver<PadInput>, timeout: Option<Duration>) -> Option<PadInput> {

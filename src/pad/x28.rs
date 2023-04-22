@@ -8,6 +8,7 @@ pub enum X28Command {
     Selection(X121Addr),
     ClearRequest,
     Read(Vec<u8>),
+    Set(Vec<(u8, u8)>),
     Status,
     ClearInvitation,
     Exit,
@@ -39,6 +40,15 @@ impl FromStr for X28Command {
 
                 Ok(X28Command::Read(params))
             }
+            "SET" => {
+                let params = parse_set_params(rest)?;
+
+                if params.is_empty() {
+                    return Err("params required!".into());
+                }
+
+                Ok(X28Command::Set(params))
+            }
             "STAT" | "STATUS" => Ok(X28Command::Status),
             "ICLR" | "ICLEAR" => Ok(X28Command::ClearInvitation),
             "EXIT" => Ok(X28Command::Exit),
@@ -57,7 +67,33 @@ fn parse_read_params(s: &str) -> Result<Vec<u8>, String> {
     }
 
     s.split(',')
-        .map(|p| u8::from_str(p.trim()).map_err(|_| "invalid param".into()))
+        .map(|a| u8::from_str(a.trim()).map_err(|_| "invalid param".into()))
+        .collect()
+}
+
+fn parse_set_params(s: &str) -> Result<Vec<(u8, u8)>, String> {
+    let s = s.trim();
+
+    if s.is_empty() {
+        return Ok(vec![]);
+    }
+
+    s.split(',')
+        .map(|a| {
+            let Some((param, value)) = a.split_once(':') else {
+                return Err("invalid set argument".into());
+            };
+
+            let Ok(param) = u8::from_str(param.trim()) else {
+                return Err("invalid param".into());
+            };
+
+            let Ok(value) = u8::from_str(value.trim()) else {
+                return Err("invalid value".into());
+            };
+
+            Ok((param, value))
+        })
         .collect()
 }
 
@@ -123,6 +159,31 @@ mod tests {
         assert!(X28Command::from_str("par? a").is_err());
         assert!(X28Command::from_str("par? 1,a").is_err());
         assert!(X28Command::from_str("par? ,").is_err());
+    }
+
+    #[test]
+    fn from_str_set() {
+        assert_eq!(
+            X28Command::from_str("set 1:1"),
+            Ok(X28Command::Set(vec![(1, 1)]))
+        );
+        assert_eq!(
+            X28Command::from_str("set 1:1,2:2"),
+            Ok(X28Command::Set(vec![(1, 1), (2, 2)]))
+        );
+        assert_eq!(
+            X28Command::from_str("set 1: 1, 2 : 2"),
+            Ok(X28Command::Set(vec![(1, 1), (2, 2)]))
+        );
+    }
+
+    #[test]
+    fn from_str_set_invalid() {
+        assert!(X28Command::from_str("set").is_err());
+        assert!(X28Command::from_str("set 1").is_err());
+        assert!(X28Command::from_str("set 1:a").is_err());
+        assert!(X28Command::from_str("set a").is_err());
+        assert!(X28Command::from_str("set ,").is_err());
     }
 
     #[test]
