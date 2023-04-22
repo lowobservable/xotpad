@@ -308,6 +308,9 @@ pub fn run_user_pad(
                             Ok(X28Command::Set(ref params)) => {
                                 x28_set(&mut current_x3_params, params);
                             }
+                            Ok(X28Command::SetRead(ref params)) => {
+                                x28_set_read(&mut current_x3_params, params);
+                            }
                             Ok(X28Command::Status) => {
                                 if current_call.is_some() {
                                     print!("ENGAGED\r\n");
@@ -536,7 +539,7 @@ fn x29_set(
 
     let errors: Vec<(u8, u8)> = requested
         .iter()
-        .map(|&p| (p.0, current_params.set(p.0, p.1)))
+        .map(|&(p, v)| (p, current_params.set(p, v)))
         .filter_map(|(p, r)| {
             // TODO: improve this, so we can return a correct error code!
             if r.is_err() {
@@ -563,20 +566,20 @@ fn x29_set_read(
     if requested.is_empty() {
         *current_params = user_params.clone();
 
-        let requested: Vec<u8> = requested.iter().map(|&p| p.0).collect();
+        let requested: Vec<u8> = requested.iter().map(|&(p, _)| p).collect();
 
         return x29_read(svc, current_params, &requested);
     }
 
     let params: Vec<(u8, u8)> = requested
         .iter()
-        .map(|&p| {
+        .map(|&(p, v)| {
             // TODO: improve this, so we can return a correct error code!
-            if current_params.set(p.0, p.1).is_err() {
-                return (p.0, 0x80);
+            if current_params.set(p, v).is_err() {
+                return (p, 0x80);
             }
 
-            (p.0, current_params.get(p.0).unwrap_or(0x81))
+            (p, current_params.get(p).unwrap_or(0x81))
         })
         .collect();
 
@@ -604,10 +607,24 @@ fn x28_read(current_params: &X3Params, requested: &[u8]) {
 
 fn x28_set(current_params: &mut X3Params, requested: &[(u8, u8)]) {
     for &(param, value) in requested {
-        if current_params.set(param, value).is_err() {
-            // TODO: do we tell the user?
-        }
+        // TODO: should we just ignore errors?
+        let _ = current_params.set(param, value);
     }
+}
+
+fn x28_set_read(current_params: &mut X3Params, requested: &[(u8, u8)]) {
+    let params: Vec<(u8, Option<u8>)> = requested
+        .iter()
+        .map(|&(p, v)| {
+            if current_params.set(p, v).is_err() {
+                return (p, None);
+            }
+
+            (p, current_params.get(p))
+        })
+        .collect();
+
+    print!("PAR {}\r\n", format_params(&params));
 }
 
 fn recv_input(channel: &Receiver<PadInput>, timeout: Option<Duration>) -> Option<PadInput> {
