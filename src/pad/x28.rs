@@ -200,15 +200,15 @@ mod tests {
     fn from_str_set_read() {
         assert_eq!(
             X28Command::from_str("set? 1:1"),
-            Ok(X28Command::Set(vec![(1, 1)]))
+            Ok(X28Command::SetRead(vec![(1, 1)]))
         );
         assert_eq!(
             X28Command::from_str("set? 1:1,2:2"),
-            Ok(X28Command::Set(vec![(1, 1), (2, 2)]))
+            Ok(X28Command::SetRead(vec![(1, 1), (2, 2)]))
         );
         assert_eq!(
             X28Command::from_str("set? 1: 1, 2 : 2"),
-            Ok(X28Command::Set(vec![(1, 1), (2, 2)]))
+            Ok(X28Command::SetRead(vec![(1, 1), (2, 2)]))
         );
     }
 
