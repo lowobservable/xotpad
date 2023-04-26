@@ -3,9 +3,12 @@ name = "xotpad"
 version = "0.0.0"
 edition = "2021"
 
+[workspace]
+
 [dependencies]
 bytes = "1.4.0"
 clap = { version = "4.2.1", default-features = false, features = ["std", "derive", "usage", "help", "error-context"] }
 crossterm = "0.26.1"
-regex = "1.7.3"
 tracing-mutex = "0.2.1"
+
+libxotpad = { path = "libxotpad" }

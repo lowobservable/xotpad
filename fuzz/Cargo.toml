@@ -11,8 +11,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 bytes = "1.2.0"
 
-[dependencies.xotpad]
-path = ".."
+libxotpad = { path = "../libxotpad" }
+xotpad = { path = ".." }
 
 # Prevent this from interfering with workspaces
 [workspace]

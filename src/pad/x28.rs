@@ -1,7 +1,6 @@
+use libxotpad::x121::X121Addr;
 use std::fmt::Write;
 use std::str::FromStr;
-
-use crate::x121::X121Addr;
 
 #[derive(PartialEq, Debug)]
 pub enum X28Command {

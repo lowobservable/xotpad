@@ -1,4 +1,7 @@
 use clap::Parser;
+use libxotpad::x121::X121Addr;
+use libxotpad::x25::{X25Modulo, X25Params};
+use libxotpad::xot::{self, XotResolver};
 use std::collections::HashMap;
 use std::io;
 use std::net::TcpListener;
@@ -6,9 +9,6 @@ use std::time::Duration;
 
 use xotpad::pad;
 use xotpad::pad::x3::{X3Echo, X3Forward, X3Idle, X3Params};
-use xotpad::x121::X121Addr;
-use xotpad::x25::{X25Modulo, X25Params};
-use xotpad::xot::{self, XotResolver};
 
 fn main() -> io::Result<()> {
     let args = Args::parse();

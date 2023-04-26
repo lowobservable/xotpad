@@ -1,5 +1,8 @@
 use bytes::{BufMut, Bytes, BytesMut};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use libxotpad::x121::X121Addr;
+use libxotpad::x25::{Svc, Vc, X25Params};
+use libxotpad::xot::{self, XotLink, XotResolver};
 use std::collections::HashMap;
 use std::io::{self, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -10,10 +13,6 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use tracing_mutex::stdsync::TracingMutex;
-
-use crate::x121::X121Addr;
-use crate::x25::{Svc, Vc, X25Params};
-use crate::xot::{self, XotLink, XotResolver};
 
 use self::x28::{format_params, X28Command};
 use self::x29::X29PadMessage;

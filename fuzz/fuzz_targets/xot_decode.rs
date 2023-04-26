@@ -3,9 +3,9 @@
 use bytes::BytesMut;
 use libfuzzer_sys::fuzz_target;
 
-extern crate xotpad;
+extern crate libxotpad;
 
-use xotpad::xot::fuzzing::decode;
+use libxotpad::xot::fuzzing::decode;
 
 fuzz_target!(|data: &[u8]| {
     let mut buf = BytesMut::from(data);
