@@ -109,8 +109,8 @@ fn load_config(args: &Args) -> Config {
     x3_profiles.insert(
         "default",
         X3Params {
-            echo: X3Echo::try_from(0).unwrap(),
-            forward: X3Forward::try_from(2).unwrap(),
+            echo: X3Echo::try_from(1).unwrap(),
+            forward: X3Forward::try_from(126).unwrap(),
             idle: X3Idle::from(0),
         },
     );
@@ -120,7 +120,7 @@ fn load_config(args: &Args) -> Config {
     if let Some(ref xot_gateway) = args.xot_gateway {
         let _ = resolver.add(".*", xot_gateway);
     } else {
-        let _ = resolver.add("^(...)(...)..", "\\2.\\1.x25.org");
+        let _ = resolver.add("^(...)(...)", "\\2.\\1.x25.org");
     }
 
     // TODO...
