@@ -45,7 +45,7 @@ To exit the interactive PAD, use the `exit` command.
 By default, the interactive PAD will _not_ accept incoming calls. To listen for, and accept, incoming calls:
 
 ```
-xotpad -g xot.trysteropac.net -L
+xotpad -g xot.trysteropac.net -l
 ```
 
 Incoming calls will be automatically accepted, assuming the PAD is free.

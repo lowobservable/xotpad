@@ -49,28 +49,39 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-// -P X.25 profile
-// -p X.3 profile
+// -c, --config <FILE>          config file
+// -P, --x25-profile <PROFILE>  X.25 profile
+// -s, --serve                  SERVE!
 #[derive(Parser, Debug)]
 struct Args {
     /// Local X.121 address.
-    #[arg(short = 'a', value_name = "ADDRESS")]
+    #[arg(short = 'a', long = "address", value_name = "ADDRESS")]
     local_addr: Option<X121Addr>,
 
     /// XOT gateway.
-    #[arg(short = 'g', value_name = "GATEWAY")]
+    #[arg(short = 'g', long = "gateway", value_name = "GATEWAY")]
     xot_gateway: Option<String>,
 
     /// Bind address for incoming XOT connections.
-    #[arg(short = 'G', value_name = "ADDRESS", default_value = "0.0.0.0")]
+    #[arg(
+        short = 'b',
+        long = "bind",
+        default_value = "0.0.0.0",
+        value_name = "ADDRESS"
+    )]
     xot_bind_addr: String,
 
     /// X.3 profile.
-    #[arg(short = 'p', value_name = "PROFILE", default_value = "default")]
+    #[arg(
+        short = 'p',
+        long = "x3-profile",
+        default_value = "default",
+        value_name = "PROFILE"
+    )]
     x3_profile: String,
 
     /// Listen for incoming calls.
-    #[arg(short = 'L')]
+    #[arg(short = 'l', long = "listen")]
     should_listen: bool,
 
     /// X.121 address to call.
