@@ -317,6 +317,13 @@ pub fn run_user_pad(
                                     print!("FREE\r\n");
                                 }
                             }
+                            Ok(X28Command::Reset) => {
+                                if let Some((svc, _)) = current_call.as_ref() {
+                                    svc.reset(0, 0)?;
+                                } else {
+                                    print!("ERROR... NOT CONNECTED!\r\n");
+                                }
+                            }
                             Ok(X28Command::ClearInvitation) => {
                                 if let Some((svc, _)) = current_call.as_ref() {
                                     x29_clear_invitation(svc)?;

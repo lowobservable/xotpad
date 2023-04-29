@@ -10,6 +10,7 @@ pub enum X28Command {
     Set(Vec<(u8, u8)>),
     SetRead(Vec<(u8, u8)>),
     Status,
+    Reset,
     ClearInvitation,
     Exit,
 }
@@ -59,6 +60,7 @@ impl FromStr for X28Command {
                 Ok(X28Command::SetRead(params))
             }
             "STAT" | "STATUS" => Ok(X28Command::Status),
+            "RESET" => Ok(X28Command::Reset),
             "ICLR" | "ICLEAR" => Ok(X28Command::ClearInvitation),
             "EXIT" => Ok(X28Command::Exit),
             _ => Err("unrecognized command".into()),
