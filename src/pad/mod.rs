@@ -31,7 +31,7 @@ pub fn call(addr: &X121Addr, x25_params: &X25Params, resolver: &XotResolver) -> 
 }
 
 #[derive(Copy, Clone, PartialEq)]
-enum PadUserState {
+enum PadLocalState {
     Command,
     Data,
 }
@@ -39,8 +39,8 @@ enum PadUserState {
 #[derive(Debug)]
 enum PadInput {
     Call,
-    Network(io::Result<Option<(Bytes, bool)>>),
-    User(io::Result<Option<(u8, Instant)>>),
+    Local(io::Result<Option<(u8, Instant)>>),
+    Remote(io::Result<Option<(Bytes, bool)>>),
     TimeOut,
 }
 
@@ -60,7 +60,7 @@ pub fn run_user_pad(
 
     enable_raw_mode()?;
 
-    // Start the user input thread.
+    // Start the local input thread.
     thread::spawn({
         let tx = tx.clone();
 
@@ -72,7 +72,7 @@ pub fn run_user_pad(
 
                 let input = byte.map(|b| Some((b, Instant::now())));
 
-                if tx.send(PadInput::User(input)).is_err() {
+                if tx.send(PadInput::Local(input)).is_err() {
                     break;
                 }
 
@@ -81,13 +81,13 @@ pub fn run_user_pad(
                 }
             }
 
-            let _ = tx.send(PadInput::User(Ok(None)));
+            let _ = tx.send(PadInput::Local(Ok(None)));
         }
     });
 
     let current_call = Arc::new(TracingMutex::new(Option::<(Svc, X25Params)>::None));
 
-    let mut user_state = PadUserState::Command;
+    let mut local_state = PadLocalState::Command;
     let mut is_one_shot = false;
 
     if let Some(svc) = svc {
@@ -95,7 +95,7 @@ pub fn run_user_pad(
 
         current_call.lock().unwrap().replace((svc, x25_params));
 
-        user_state = PadUserState::Data;
+        local_state = PadLocalState::Data;
         is_one_shot = true;
 
         {
@@ -103,7 +103,7 @@ pub fn run_user_pad(
 
             let (svc, _) = current_call.as_ref().unwrap();
 
-            spawn_network_thread(svc, tx.clone());
+            spawn_remote_thread(svc, tx.clone());
         }
     }
 
@@ -156,10 +156,10 @@ pub fn run_user_pad(
     let mut data_buf = BytesMut::with_capacity(128);
     let mut last_data_time = None;
 
-    let user_x3_params = x3_profiles.get(x3_profile).expect("unknown X.3 profile");
-    let mut current_x3_params = user_x3_params.clone();
+    let local_x3_params = x3_profiles.get(x3_profile).expect("unknown X.3 profile");
+    let mut current_x3_params = local_x3_params.clone();
 
-    if user_state == PadUserState::Command {
+    if local_state == PadLocalState::Command {
         print!("*");
         io::stdout().flush()?;
     }
@@ -177,20 +177,20 @@ pub fn run_user_pad(
             PadInput::Call => {
                 println!("\r\nyou got a call!\r\n");
 
-                user_state = PadUserState::Data;
+                local_state = PadLocalState::Data;
 
                 let (svc, _) = current_call.as_ref().unwrap();
 
-                spawn_network_thread(svc, tx.clone());
+                spawn_remote_thread(svc, tx.clone());
             }
-            PadInput::Network(Ok(Some((buf, true)))) => {
+            PadInput::Remote(Ok(Some((buf, true)))) => {
                 let message = X29PadMessage::decode(buf);
 
                 match message {
                     Ok(X29PadMessage::Set(ref params)) => {
                         let (svc, _) = current_call.as_ref().unwrap();
 
-                        x29_set(svc, &mut current_x3_params, params, user_x3_params)?;
+                        x29_set(svc, &mut current_x3_params, params, local_x3_params)?;
                     }
                     Ok(X29PadMessage::Read(ref params)) => {
                         let (svc, _) = current_call.as_ref().unwrap();
@@ -200,7 +200,7 @@ pub fn run_user_pad(
                     Ok(X29PadMessage::SetRead(ref params)) => {
                         let (svc, _) = current_call.as_ref().unwrap();
 
-                        x29_set_read(svc, &mut current_x3_params, params, user_x3_params)?;
+                        x29_set_read(svc, &mut current_x3_params, params, local_x3_params)?;
                     }
                     Ok(X29PadMessage::Indicate(_)) => todo!("XXX"),
                     Ok(X29PadMessage::ClearInvitation) => {
@@ -215,15 +215,15 @@ pub fn run_user_pad(
                             break;
                         }
 
-                        ensure_command(&mut user_state);
+                        ensure_command(&mut local_state);
                     }
                     Err(err) => println!("unrecognized or invalid X.29 PAD message"),
                 }
             }
-            PadInput::Network(Ok(Some((buf, false)))) => {
+            PadInput::Remote(Ok(Some((buf, false)))) => {
                 io::stdout().write_all(&buf)?;
             }
-            PadInput::Network(Ok(None)) => {
+            PadInput::Remote(Ok(None)) => {
                 // XXX: we can tell whether we should show anything or not, based
                 // on whether the SVC still "exists" otherwise we would have shown
                 // the important info before...
@@ -239,10 +239,10 @@ pub fn run_user_pad(
                     break;
                 }
 
-                ensure_command(&mut user_state);
+                ensure_command(&mut local_state);
             }
-            PadInput::Network(Err(err)) => {
-                println!("network error: {err:?}");
+            PadInput::Remote(Err(err)) => {
+                println!("remote error: {err:?}");
 
                 current_call.take();
 
@@ -250,16 +250,16 @@ pub fn run_user_pad(
                     break;
                 }
 
-                ensure_command(&mut user_state);
+                ensure_command(&mut local_state);
             }
-            PadInput::User(Ok(None) | Err(_)) => {
+            PadInput::Local(Ok(None) | Err(_)) => {
                 if let Some((svc, _)) = current_call.take() {
                     svc.flush()?;
                     svc.clear(0, 0)?; // TODO
                 }
             }
-            PadInput::User(Ok(Some((byte, input_time)))) => match (user_state, byte) {
-                (PadUserState::Command, /* Enter */ 0x0d) => {
+            PadInput::Local(Ok(Some((byte, input_time)))) => match (local_state, byte) {
+                (PadLocalState::Command, /* Enter */ 0x0d) => {
                     let buf = command_buf.split();
 
                     let line = str::from_utf8(&buf[..]).unwrap().trim();
@@ -280,11 +280,11 @@ pub fn run_user_pad(
 
                                             current_call.replace((svc, x25_params));
 
-                                            user_state = PadUserState::Data;
+                                            local_state = PadLocalState::Data;
 
                                             let (svc, _) = current_call.as_ref().unwrap();
 
-                                            spawn_network_thread(svc, tx.clone());
+                                            spawn_remote_thread(svc, tx.clone());
                                         }
                                         Err(xxx) => print!("SOMETHING WENT WRONG: {xxx}\r\n"),
                                     }
@@ -345,12 +345,12 @@ pub fn run_user_pad(
                     }
 
                     if current_call.is_some() {
-                        user_state = PadUserState::Data;
+                        local_state = PadLocalState::Data;
                     } else {
                         print!("*");
                     }
                 }
-                (PadUserState::Command, /* Ctrl+C */ 0x03) => {
+                (PadLocalState::Command, /* Ctrl+C */ 0x03) => {
                     if command_buf.is_empty() {
                         if let Some((svc, _)) = current_call.take() {
                             svc.clear(0, 0)?;
@@ -361,7 +361,7 @@ pub fn run_user_pad(
 
                     command_buf.clear();
                 }
-                (PadUserState::Command, /* Ctrl+P */ 0x10) => {
+                (PadLocalState::Command, /* Ctrl+P */ 0x10) => {
                     if command_buf.is_empty() && current_call.is_some() {
                         let (svc, x25_params) = current_call.as_ref().unwrap();
 
@@ -376,18 +376,18 @@ pub fn run_user_pad(
                         )?;
 
                         print!("\r\n");
-                        user_state = PadUserState::Data;
+                        local_state = PadLocalState::Data;
                     }
                 }
-                (PadUserState::Command, byte) => {
+                (PadLocalState::Command, byte) => {
                     command_buf.put_u8(byte);
 
                     io::stdout().write_all(&[byte])?;
                 }
-                (PadUserState::Data, /* Ctrl+P */ 0x10) => {
-                    ensure_command(&mut user_state);
+                (PadLocalState::Data, /* Ctrl+P */ 0x10) => {
+                    ensure_command(&mut local_state);
                 }
-                (PadUserState::Data, byte) => {
+                (PadLocalState::Data, byte) => {
                     if current_x3_params.echo.into() {
                         io::stdout().write_all(&[byte])?;
                     }
@@ -489,17 +489,17 @@ fn send_x29(svc: &Svc, message: X29PadMessage) -> io::Result<()> {
     svc.send(buf.into(), true)
 }
 
-fn ensure_command(state: &mut PadUserState) {
-    if *state == PadUserState::Command {
+fn ensure_command(state: &mut PadLocalState) {
+    if *state == PadLocalState::Command {
         return;
     }
 
     print!("\r\n*");
 
-    *state = PadUserState::Command;
+    *state = PadLocalState::Command;
 }
 
-fn spawn_network_thread(svc: &Svc, channel: Sender<PadInput>) -> JoinHandle<()> {
+fn spawn_remote_thread(svc: &Svc, channel: Sender<PadInput>) -> JoinHandle<()> {
     let svc = svc.clone();
 
     thread::spawn(move || loop {
@@ -507,7 +507,7 @@ fn spawn_network_thread(svc: &Svc, channel: Sender<PadInput>) -> JoinHandle<()> 
 
         let should_continue = matches!(result, Ok(Some(_)));
 
-        if channel.send(PadInput::Network(result)).is_err() {
+        if channel.send(PadInput::Remote(result)).is_err() {
             break;
         }
 
@@ -536,10 +536,10 @@ fn x29_set(
     svc: &Svc,
     current_params: &mut X3Params,
     requested: &[(u8, u8)],
-    user_params: &X3Params,
+    local_params: &X3Params,
 ) -> io::Result<()> {
     if requested.is_empty() {
-        *current_params = user_params.clone();
+        *current_params = local_params.clone();
         return Ok(());
     }
 
@@ -567,10 +567,10 @@ fn x29_set_read(
     svc: &Svc,
     current_params: &mut X3Params,
     requested: &[(u8, u8)],
-    user_params: &X3Params,
+    local_params: &X3Params,
 ) -> io::Result<()> {
     if requested.is_empty() {
-        *current_params = user_params.clone();
+        *current_params = local_params.clone();
 
         let requested: Vec<u8> = requested.iter().map(|&(p, _)| p).collect();
 
