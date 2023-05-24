@@ -7,7 +7,7 @@
 use std::ops::Deref;
 use std::time::Duration;
 
-pub const PARAMS: [u8; 4] = [2, 3, 4, 13];
+pub const PARAMS: [u8; 8] = [2, 3, 4, 13, 15, 16, 17, 18];
 
 #[derive(Clone, Debug)]
 pub struct X3Params {
@@ -18,6 +18,14 @@ pub struct X3Params {
     pub idle: X3Idle,
 
     pub lf_insert: X3LfInsert,
+
+    pub editing: X3Editing,
+
+    pub char_delete: X3CharDelete,
+
+    pub line_delete: X3LineDelete,
+
+    pub line_display: X3LineDisplay,
 }
 
 impl X3Params {
@@ -27,6 +35,10 @@ impl X3Params {
             3 => Some(*self.forward),
             4 => Some(*self.idle),
             13 => Some(*self.lf_insert),
+            15 => Some(*self.editing),
+            16 => Some(*self.char_delete),
+            17 => Some(*self.line_delete),
+            18 => Some(*self.line_display),
             _ => None,
         }
     }
@@ -37,6 +49,10 @@ impl X3Params {
             3 => self.forward = X3Forward::try_from(value)?,
             4 => self.idle = X3Idle::from(value),
             13 => self.lf_insert = X3LfInsert::try_from(value)?,
+            15 => self.editing = X3Editing::try_from(value)?,
+            16 => self.char_delete = X3CharDelete::try_from(value)?,
+            17 => self.line_delete = X3LineDelete::try_from(value)?,
+            18 => self.line_display = X3LineDisplay::try_from(value)?,
             _ => return Err("unsupported parameter".into()),
         };
 
@@ -207,5 +223,123 @@ impl X3LfInsert {
 
     pub fn after_echo(&self, byte: u8) -> bool {
         byte == /* CR */ 0x0d && (self.0 & 4 == 4)
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct X3Editing(u8);
+
+impl Deref for X3Editing {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<u8> for X3Editing {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 | 1 => Ok(X3Editing(value)),
+            _ => Err("unsupported editing value"),
+        }
+    }
+}
+
+impl From<X3Editing> for bool {
+    fn from(editing: X3Editing) -> Self {
+        match editing {
+            X3Editing(0) => false,
+            X3Editing(1) => true,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct X3CharDelete(u8);
+
+impl Deref for X3CharDelete {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<u8> for X3CharDelete {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            127 => Ok(X3CharDelete(value)),
+            _ => Err("unsupported character delete value"),
+        }
+    }
+}
+
+impl X3CharDelete {
+    pub fn is_match(&self, byte: u8) -> bool {
+        byte == self.0
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct X3LineDelete(u8);
+
+impl Deref for X3LineDelete {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<u8> for X3LineDelete {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value > 127 {
+            return Err("unsupported line delete value");
+        }
+
+        Ok(X3LineDelete(value))
+    }
+}
+
+impl X3LineDelete {
+    pub fn is_match(&self, byte: u8) -> bool {
+        byte == self.0
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct X3LineDisplay(u8);
+
+impl Deref for X3LineDisplay {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<u8> for X3LineDisplay {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value > 127 {
+            return Err("unsupported line display value");
+        }
+
+        Ok(X3LineDisplay(value))
+    }
+}
+
+impl X3LineDisplay {
+    pub fn is_match(&self, byte: u8) -> bool {
+        byte == self.0
     }
 }

@@ -387,7 +387,22 @@ pub fn run_user_pad(
                 (PadLocalState::Data, /* Ctrl+P */ 0x10) => {
                     ensure_command(&mut local_state);
                 }
-                (PadLocalState::Data, byte) => {
+                (PadLocalState::Data, byte) => 'input: {
+                    let editing: bool = current_x3_params.editing.into();
+
+                    if editing {
+                        if current_x3_params.char_delete.is_match(byte) {
+                            handle_char_delete(&mut data_buf)?;
+                            break 'input;
+                        } else if current_x3_params.line_delete.is_match(byte) {
+                            handle_line_delete(&mut data_buf)?;
+                            break 'input;
+                        } else if current_x3_params.line_display.is_match(byte) {
+                            handle_line_display(&data_buf)?;
+                            break 'input;
+                        }
+                    }
+
                     if current_x3_params.echo.into() {
                         io::stdout().write_all(&[byte])?;
 
@@ -421,7 +436,10 @@ pub fn run_user_pad(
         timeout = None;
 
         if let Some(delay) = current_x3_params.idle.into() {
-            if !data_buf.is_empty() {
+            let editing: bool = current_x3_params.editing.into();
+
+            // The idle timeout does not apply when editing....
+            if !data_buf.is_empty() && !editing {
                 let now = Instant::now();
                 let deadline = last_data_time.unwrap().add(delay);
 
@@ -479,8 +497,11 @@ fn should_send_data(
         return false;
     }
 
+    let editing: bool = x3_params.editing.into();
+
     // NOTE: >= because of the possible insertion of a LF, after CR
-    if buf.len() >= x25_params.send_packet_size {
+    // this does not apply if editing... kinda makes sense I guess :)
+    if buf.len() >= x25_params.send_packet_size && !editing {
         return true;
     }
 
@@ -673,6 +694,34 @@ fn write_recv_data(mut stdout: Stdout, buf: &[u8], params: &X3Params) -> io::Res
     }
 
     Ok(())
+}
+
+fn handle_char_delete(buf: &mut BytesMut) -> io::Result<()> {
+    if buf.is_empty() {
+        return Ok(());
+    }
+
+    buf.truncate(buf.len() - 1);
+
+    // TODO: Now do some terminal thing...
+    io::stdout().write_all(&[0x08, 0x20, 0x08])
+}
+
+fn handle_line_delete(buf: &mut BytesMut) -> io::Result<()> {
+    if buf.is_empty() {
+        return Ok(());
+    }
+
+    // TODO: it's not clear if this should clear the whole buffer, or just a "LINE"... I think
+    // the Cisco X.28 command will just show XXX and then, er, it doesn't really work tho...
+    buf.clear();
+
+    io::stdout().write_all(b"XXX\r\n")
+}
+
+fn handle_line_display(buf: &BytesMut) -> io::Result<()> {
+    io::stdout().write_all(b"\r\n")?;
+    io::stdout().write_all(buf)
 }
 
 #[cfg(fuzzing)]
