@@ -8,7 +8,7 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use xotpad::pad;
-use xotpad::pad::x3::{X3Echo, X3Forward, X3Idle, X3Params};
+use xotpad::pad::x3::{X3Echo, X3Forward, X3Idle, X3LfInsert, X3Params};
 
 fn main() -> io::Result<()> {
     let args = Args::parse();
@@ -123,6 +123,7 @@ fn load_config(args: &Args) -> Config {
             echo: X3Echo::try_from(1).unwrap(),
             forward: X3Forward::try_from(126).unwrap(),
             idle: X3Idle::from(0),
+            lf_insert: X3LfInsert::try_from(0).unwrap(),
         },
     );
 

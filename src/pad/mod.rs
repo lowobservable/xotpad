@@ -4,7 +4,7 @@ use libxotpad::x121::X121Addr;
 use libxotpad::x25::{Svc, Vc, X25Params};
 use libxotpad::xot::{self, XotLink, XotResolver};
 use std::collections::HashMap;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Read, Stdout, Write};
 use std::net::TcpListener;
 use std::ops::{Add, Sub};
 use std::str::{self, FromStr};
@@ -221,7 +221,7 @@ pub fn run_user_pad(
                 }
             }
             PadInput::Remote(Ok(Some((buf, false)))) => {
-                io::stdout().write_all(&buf)?;
+                write_recv_data(io::stdout(), &buf, &current_x3_params)?;
             }
             PadInput::Remote(Ok(None)) => {
                 // XXX: we can tell whether we should show anything or not, based
@@ -259,7 +259,7 @@ pub fn run_user_pad(
                 }
             }
             PadInput::Local(Ok(Some((byte, input_time)))) => match (local_state, byte) {
-                (PadLocalState::Command, /* Enter */ 0x0d) => {
+                (PadLocalState::Command, /* CR */ 0x0d) => {
                     let buf = command_buf.split();
 
                     let line = str::from_utf8(&buf[..]).unwrap().trim();
@@ -390,6 +390,12 @@ pub fn run_user_pad(
                 (PadLocalState::Data, byte) => {
                     if current_x3_params.echo.into() {
                         io::stdout().write_all(&[byte])?;
+
+                        // TODO: it is not obvious if this also depends on ECHO (param 2)...
+                        // i.e should this be inside this IF block?
+                        if current_x3_params.lf_insert.after_echo(byte) {
+                            io::stdout().write_all(&[/* LF */ 0x0a])?;
+                        }
                     }
 
                     let (svc, x25_params) = current_call.as_ref().unwrap();
@@ -452,23 +458,31 @@ fn queue_and_send_data_if_ready(
 ) -> io::Result<()> {
     buf.put_u8(byte);
 
-    if !should_send_data(buf, x25_params, x3_params) {
+    if x3_params.lf_insert.after_send(byte) {
+        buf.put_u8(/* LF */ 0x0a);
+    }
+
+    if !should_send_data(buf, byte, x25_params, x3_params) {
         return Ok(());
     }
 
     send_data(svc, buf)
 }
 
-fn should_send_data(buf: &BytesMut, x25_params: &X25Params, x3_params: &X3Params) -> bool {
+fn should_send_data(
+    buf: &BytesMut,
+    last_byte: u8,
+    x25_params: &X25Params,
+    x3_params: &X3Params,
+) -> bool {
     if buf.is_empty() {
         return false;
     }
 
-    if buf.len() == x25_params.send_packet_size {
+    // NOTE: >= because of the possible insertion of a LF, after CR
+    if buf.len() >= x25_params.send_packet_size {
         return true;
     }
-
-    let last_byte = *buf.last().unwrap();
 
     x3_params.forward.is_match(last_byte)
 }
@@ -646,6 +660,19 @@ fn recv_input(channel: &Receiver<PadInput>, timeout: Option<Duration>) -> Option
         Ok(input) => Some(input),
         Err(_) => None,
     }
+}
+
+fn write_recv_data(mut stdout: Stdout, buf: &[u8], params: &X3Params) -> io::Result<()> {
+    // TODO: this can be improved to avoid writing individual characters...
+    for &byte in buf {
+        stdout.write_all(&[byte])?;
+
+        if params.lf_insert.after_recv(byte) {
+            stdout.write_all(&[/* LF */ 0x0a])?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(fuzzing)]

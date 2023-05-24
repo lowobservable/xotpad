@@ -7,7 +7,7 @@
 use std::ops::Deref;
 use std::time::Duration;
 
-pub const PARAMS: [u8; 3] = [2, 3, 4];
+pub const PARAMS: [u8; 4] = [2, 3, 4, 13];
 
 #[derive(Clone, Debug)]
 pub struct X3Params {
@@ -16,6 +16,8 @@ pub struct X3Params {
     pub forward: X3Forward,
 
     pub idle: X3Idle,
+
+    pub lf_insert: X3LfInsert,
 }
 
 impl X3Params {
@@ -24,6 +26,7 @@ impl X3Params {
             2 => Some(*self.echo),
             3 => Some(*self.forward),
             4 => Some(*self.idle),
+            13 => Some(*self.lf_insert),
             _ => None,
         }
     }
@@ -33,6 +36,7 @@ impl X3Params {
             2 => self.echo = X3Echo::try_from(value)?,
             3 => self.forward = X3Forward::try_from(value)?,
             4 => self.idle = X3Idle::from(value),
+            13 => self.lf_insert = X3LfInsert::try_from(value)?,
             _ => return Err("unsupported parameter".into()),
         };
 
@@ -166,5 +170,42 @@ impl From<X3Idle> for Option<Duration> {
             X3Idle(0) => None,
             X3Idle(delay) => Some(Duration::from_millis(u64::from(delay) * 50)),
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct X3LfInsert(u8);
+
+impl Deref for X3LfInsert {
+    type Target = u8;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TryFrom<u8> for X3LfInsert {
+    type Error = &'static str;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        if value > 7 {
+            return Err("unsupported LF insert value");
+        }
+
+        Ok(X3LfInsert(value))
+    }
+}
+
+impl X3LfInsert {
+    pub fn after_recv(&self, byte: u8) -> bool {
+        byte == /* CR */ 0x0d && (self.0 & 1 == 1)
+    }
+
+    pub fn after_send(&self, byte: u8) -> bool {
+        byte == /* CR */ 0x0d && (self.0 & 2 == 2)
+    }
+
+    pub fn after_echo(&self, byte: u8) -> bool {
+        byte == /* CR */ 0x0d && (self.0 & 4 == 4)
     }
 }
