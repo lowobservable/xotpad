@@ -15,7 +15,9 @@ allowing access to X.25 networks using XOT described in
       - [x] Flow control parameter negotiation (packet and window size)
   - [ ] Interactive _Triple-X_ PAD (X.3, X.28 and X.29)
   - [ ] Host PAD providing access to local processes
-  - [ ] DNS-based X.25 address resolution
+  - [x] DNS-based resolution of...
+      - [x] XOT gateways
+      - [ ] X.25 addresses
 
 ## Usage
 
@@ -24,14 +26,14 @@ allowing access to X.25 networks using XOT described in
 To connect to a host:
 
 ```
-xotpad -g xot.trysteropac.net 73741100
+xotpad -g xot.trysteropac.net 737411
 ```
 
 To start an interactive X.28 PAD, and call the same host:
 
 <pre>
 <b>xotpad -g xot.trysteropac.net</b>
-* <b>call 73741100</b>
+* <b>call 737411</b>
 ...
 <kbd><kbd>Ctrl</kbd>+<kbd>P</kbd></kbd>
 * <b>exit</b>

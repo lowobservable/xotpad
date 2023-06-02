@@ -72,7 +72,7 @@ mod tests {
     fn lookup_hit_with_replacement() {
         let mut resolver = XotResolver::new();
 
-        let _ = resolver.add("^(...)(...)..", "\\2.\\1.x25.org");
+        let _ = resolver.add("^(...)(...)", "\\2.\\1.x25.org");
 
         let x25_addr = X121Addr::from_str("12345678").unwrap();
 
