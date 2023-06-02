@@ -3,12 +3,12 @@
 use bytes::Bytes;
 use libfuzzer_sys::fuzz_target;
 
-extern crate xotpad;
+extern crate libxotpad;
 
-use xotpad::pad::fuzzing::X29PadMessage;
+use libxotpad::x29::fuzzing::pad_message_decode;
 
 fuzz_target!(|data: &[u8]| {
     let buf = Bytes::copy_from_slice(data);
 
-    let _ = X29PadMessage::decode(buf);
+    let _ = pad_message_decode(buf);
 });

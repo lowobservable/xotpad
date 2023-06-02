@@ -4,10 +4,11 @@
 //!
 //! [ITU-T Rec. X.3 (03/00)]: https://www.itu.int/rec/T-REC-X.3-200003-I
 
+use libxotpad::x3::X3ParamError;
 use std::ops::Deref;
 use std::time::Duration;
 
-pub const PARAMS: [u8; 8] = [2, 3, 4, 13, 15, 16, 17, 18];
+const PARAMS: [u8; 8] = [2, 3, 4, 13, 15, 16, 17, 18];
 
 #[derive(Clone, Debug)]
 pub struct X3Params {
@@ -28,8 +29,8 @@ pub struct X3Params {
     pub line_display: X3LineDisplay,
 }
 
-impl X3Params {
-    pub fn get(&self, param: u8) -> Option<u8> {
+impl libxotpad::x3::X3Params for X3Params {
+    fn get(&self, param: u8) -> Option<u8> {
         match param {
             2 => Some(*self.echo),
             3 => Some(*self.forward),
@@ -43,7 +44,7 @@ impl X3Params {
         }
     }
 
-    pub fn set(&mut self, param: u8, value: u8) -> Result<(), String> {
+    fn set(&mut self, param: u8, value: u8) -> Result<(), X3ParamError> {
         match param {
             2 => self.echo = X3Echo::try_from(value)?,
             3 => self.forward = X3Forward::try_from(value)?,
@@ -53,10 +54,20 @@ impl X3Params {
             16 => self.char_delete = X3CharDelete::try_from(value)?,
             17 => self.line_delete = X3LineDelete::try_from(value)?,
             18 => self.line_display = X3LineDisplay::try_from(value)?,
-            _ => return Err("unsupported parameter".into()),
+            _ => return Err(X3ParamError::Unsupported),
         };
 
         Ok(())
+    }
+
+    fn all(&self) -> Vec<(u8, u8)> {
+        let mut params = Vec::new();
+
+        for param in PARAMS {
+            params.push((param, self.get(param).unwrap()));
+        }
+
+        params
     }
 }
 
@@ -72,12 +83,12 @@ impl Deref for X3Echo {
 }
 
 impl TryFrom<u8> for X3Echo {
-    type Error = &'static str;
+    type Error = X3ParamError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 | 1 => Ok(X3Echo(value)),
-            _ => Err("unsupported echo value"),
+            _ => Err(X3ParamError::InvalidValue),
         }
     }
 }
@@ -104,11 +115,11 @@ impl Deref for X3Forward {
 }
 
 impl TryFrom<u8> for X3Forward {
-    type Error = &'static str;
+    type Error = X3ParamError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if value > 127 {
-            return Err("unsupported forward value");
+            return Err(X3ParamError::InvalidValue);
         }
 
         Ok(X3Forward(value))
@@ -201,11 +212,11 @@ impl Deref for X3LfInsert {
 }
 
 impl TryFrom<u8> for X3LfInsert {
-    type Error = &'static str;
+    type Error = X3ParamError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if value > 7 {
-            return Err("unsupported LF insert value");
+            return Err(X3ParamError::InvalidValue);
         }
 
         Ok(X3LfInsert(value))
@@ -238,12 +249,12 @@ impl Deref for X3Editing {
 }
 
 impl TryFrom<u8> for X3Editing {
-    type Error = &'static str;
+    type Error = X3ParamError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 | 1 => Ok(X3Editing(value)),
-            _ => Err("unsupported editing value"),
+            _ => Err(X3ParamError::InvalidValue),
         }
     }
 }
@@ -270,12 +281,12 @@ impl Deref for X3CharDelete {
 }
 
 impl TryFrom<u8> for X3CharDelete {
-    type Error = &'static str;
+    type Error = X3ParamError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             127 => Ok(X3CharDelete(value)),
-            _ => Err("unsupported character delete value"),
+            _ => Err(X3ParamError::InvalidValue),
         }
     }
 }
@@ -298,11 +309,11 @@ impl Deref for X3LineDelete {
 }
 
 impl TryFrom<u8> for X3LineDelete {
-    type Error = &'static str;
+    type Error = X3ParamError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if value > 127 {
-            return Err("unsupported line delete value");
+            return Err(X3ParamError::InvalidValue);
         }
 
         Ok(X3LineDelete(value))
@@ -327,11 +338,11 @@ impl Deref for X3LineDisplay {
 }
 
 impl TryFrom<u8> for X3LineDisplay {
-    type Error = &'static str;
+    type Error = X3ParamError;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if value > 127 {
-            return Err("unsupported line display value");
+            return Err(X3ParamError::InvalidValue);
         }
 
         Ok(X3LineDisplay(value))

@@ -7,8 +7,8 @@ use std::io;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use xotpad::pad;
-use xotpad::pad::x3::{
+use xotpad::user_pad;
+use xotpad::x3::{
     X3CharDelete, X3Echo, X3Editing, X3Forward, X3Idle, X3LfInsert, X3LineDelete, X3LineDisplay,
     X3Params,
 };
@@ -30,7 +30,7 @@ fn main() -> io::Result<()> {
     };
 
     let svc = if let Some(addr) = &args.call_addr {
-        match pad::call(addr, &config.x25_params, &config.resolver) {
+        match user_pad::call(addr, &config.x25_params, &config.resolver) {
             Ok(svc) => Some(svc),
             Err(err) => {
                 return Err(io::Error::new(io::ErrorKind::Other, err));
@@ -40,16 +40,14 @@ fn main() -> io::Result<()> {
         None
     };
 
-    pad::run_user_pad(
+    user_pad::run(
         &config.x25_params,
         &config.x3_profiles,
         &config.resolver,
         config.x3_profile,
         listener,
         svc,
-    )?;
-
-    Ok(())
+    )
 }
 
 // -c, --config <FILE>          config file

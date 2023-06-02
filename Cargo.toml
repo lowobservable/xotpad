@@ -12,3 +12,4 @@ crossterm = "0.26.1"
 tracing-mutex = "0.2.1"
 
 libxotpad = { path = "libxotpad" }
+either = "1.8.1"
