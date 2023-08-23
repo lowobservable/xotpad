@@ -3,6 +3,10 @@ name = "xotpad"
 version = "0.0.0"
 edition = "2021"
 
+[features]
+default = ["x25_org"]
+x25_org = []
+
 [workspace]
 
 [dependencies]

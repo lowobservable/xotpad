@@ -137,6 +137,7 @@ fn load_config(args: &Args) -> Config {
     if let Some(ref xot_gateway) = args.xot_gateway {
         let _ = resolver.add(".*", xot_gateway);
     } else {
+        #[cfg(feature = "x25_org")]
         let _ = resolver.add("^(...)(...)", "\\2.\\1.x25.org");
     }
 
