@@ -241,7 +241,7 @@ impl Svc {
 
         let barrier = Arc::new(Barrier::new(2));
 
-        thread::spawn({
+        thread::Builder::new().name("x25_vc_1".to_string()).spawn({
             let inner = Arc::clone(&inner);
             let barrier = Arc::clone(&barrier);
 
@@ -528,7 +528,7 @@ impl VcInner {
         // wait to be interrupted while the XOT socket read is blocked.
         let recv_queue = Arc::new(TracingMutex::new(VecDeque::<io::Result<Bytes>>::new()));
 
-        thread::spawn({
+        thread::Builder::new().name("x25_vc_2".to_string()).spawn({
             let recv_queue = Arc::clone(&recv_queue);
             let engine_wait = Arc::clone(&self.engine_wait);
 

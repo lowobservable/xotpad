@@ -54,29 +54,31 @@ pub fn run(
     enable_raw_mode()?;
 
     // Start the local input thread.
-    thread::spawn({
-        let tx = tx.clone();
+    thread::Builder::new()
+        .name("user_input".to_string())
+        .spawn({
+            let tx = tx.clone();
 
-        move || {
-            let reader = BufReader::new(io::stdin());
+            move || {
+                let reader = BufReader::new(io::stdin());
 
-            for byte in reader.bytes() {
-                let should_continue = byte.is_ok();
+                for byte in reader.bytes() {
+                    let should_continue = byte.is_ok();
 
-                let input = byte.map(|b| Some((b, Instant::now())));
+                    let input = byte.map(|b| Some((b, Instant::now())));
 
-                if tx.send(PadInput::Local(input)).is_err() {
-                    break;
+                    if tx.send(PadInput::Local(input)).is_err() {
+                        break;
+                    }
+
+                    if !should_continue {
+                        break;
+                    }
                 }
 
-                if !should_continue {
-                    break;
-                }
+                let _ = tx.send(PadInput::Local(Ok(None)));
             }
-
-            let _ = tx.send(PadInput::Local(Ok(None)));
-        }
-    });
+        });
 
     let mut local_state = PadLocalState::Command;
     let mut is_one_shot = false;
@@ -115,49 +117,51 @@ pub fn run(
         let current_call = Arc::clone(&current_call);
         let tx = tx.clone();
 
-        thread::spawn(move || {
-            for tcp_stream in tcp_listener.incoming() {
-                if tcp_stream.is_err() {
-                    continue;
+        thread::Builder::new()
+            .name("user_pad_1".to_string())
+            .spawn(move || {
+                for tcp_stream in tcp_listener.incoming() {
+                    if tcp_stream.is_err() {
+                        continue;
+                    }
+
+                    let xot_link = XotLink::new(tcp_stream.unwrap());
+
+                    let incoming_call = Svc::listen(
+                        xot_link,
+                        1, /* this "channel" needs to be removed! */
+                        &x25_params,
+                    );
+
+                    if incoming_call.is_err() {
+                        continue;
+                    }
+
+                    let incoming_call = incoming_call.unwrap();
+
+                    let mut current_call = current_call.lock().unwrap();
+
+                    if current_call.is_some() {
+                        let _ = incoming_call.clear(1, 0); // Number busy
+                        continue;
+                    }
+
+                    let svc = incoming_call.accept().unwrap();
+
+                    let x25_params = svc.params();
+
+                    // TODO: should we "reset" the X.3 parameters here, for a new
+                    // call?
+
+                    let x29_pad = X29Pad::new(svc, Arc::clone(&x3_params));
+
+                    current_call.replace((x29_pad, x25_params));
+
+                    if tx.send(PadInput::Call).is_err() {
+                        break;
+                    }
                 }
-
-                let xot_link = XotLink::new(tcp_stream.unwrap());
-
-                let incoming_call = Svc::listen(
-                    xot_link,
-                    1, /* this "channel" needs to be removed! */
-                    &x25_params,
-                );
-
-                if incoming_call.is_err() {
-                    continue;
-                }
-
-                let incoming_call = incoming_call.unwrap();
-
-                let mut current_call = current_call.lock().unwrap();
-
-                if current_call.is_some() {
-                    let _ = incoming_call.clear(1, 0); // Number busy
-                    continue;
-                }
-
-                let svc = incoming_call.accept().unwrap();
-
-                let x25_params = svc.params();
-
-                // TODO: should we "reset" the X.3 parameters here, for a new
-                // call?
-
-                let x29_pad = X29Pad::new(svc, Arc::clone(&x3_params));
-
-                current_call.replace((x29_pad, x25_params));
-
-                if tx.send(PadInput::Call).is_err() {
-                    break;
-                }
-            }
-        });
+            });
     }
 
     let mut command_buf = BytesMut::with_capacity(128);
@@ -515,19 +519,22 @@ fn ensure_command(state: &mut PadLocalState) {
 fn spawn_remote_thread(x29_pad: &X29Pad, channel: Sender<PadInput>) -> JoinHandle<()> {
     let x29_pad = x29_pad.clone();
 
-    thread::spawn(move || loop {
-        let result = x29_pad.recv();
+    thread::Builder::new()
+        .name("user_pad_2".to_string())
+        .spawn(move || loop {
+            let result = x29_pad.recv();
 
-        let should_continue = matches!(result, Ok(Some(_)));
+            let should_continue = matches!(result, Ok(Some(_)));
 
-        if channel.send(PadInput::Remote(result)).is_err() {
-            break;
-        }
+            if channel.send(PadInput::Remote(result)).is_err() {
+                break;
+            }
 
-        if !should_continue {
-            break;
-        }
-    })
+            if !should_continue {
+                break;
+            }
+        })
+        .unwrap()
 }
 
 fn read_params(params: &X3Params, request: &[u8]) {

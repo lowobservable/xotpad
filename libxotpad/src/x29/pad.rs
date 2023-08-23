@@ -55,7 +55,7 @@ impl X29Pad {
         let recv_queue = Arc::new((TracingMutex::new(VecDeque::new()), TracingCondvar::new()));
         let indicate_channel = Arc::new(TracingMutex::new(None));
 
-        thread::spawn({
+        thread::Builder::new().name("x29_pad".to_string()).spawn({
             let svc = svc.clone();
             let recv_queue = Arc::clone(&recv_queue);
 
