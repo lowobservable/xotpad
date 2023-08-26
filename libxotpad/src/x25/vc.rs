@@ -898,7 +898,9 @@ impl VcInner {
     }
 
     fn send_queued_data(&self, state: &mut VcState) -> (usize, usize) {
-        let VcState::DataTransfer(ref mut data_transfer_state) = *state else { panic!("unexpected state") };
+        let VcState::DataTransfer(ref mut data_transfer_state) = *state else {
+            panic!("unexpected state")
+        };
 
         let mut queue = self.send_data_queue.0.lock().unwrap();
 

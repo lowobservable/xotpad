@@ -1212,7 +1212,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::CallRequest);
 
-        let X25Packet::CallRequest(call_request) = packet else { unreachable!() };
+        let X25Packet::CallRequest(call_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(call_request.modulo, X25Modulo::Normal);
         assert_eq!(call_request.channel, 1);
@@ -1244,7 +1246,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::CallRequest);
 
-        let X25Packet::CallRequest(call_request) = packet else { unreachable!() };
+        let X25Packet::CallRequest(call_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(call_request.modulo, X25Modulo::Normal);
         assert_eq!(call_request.channel, 1);
@@ -1286,7 +1290,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::CallRequest);
 
-        let X25Packet::CallRequest(call_request) = packet else { unreachable!() };
+        let X25Packet::CallRequest(call_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(call_request.modulo, X25Modulo::Normal);
         assert_eq!(call_request.channel, 1);
@@ -1398,7 +1404,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::CallAccept);
 
-        let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+        let X25Packet::CallAccept(call_accept) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(call_accept.modulo, X25Modulo::Normal);
         assert_eq!(call_accept.channel, 1);
@@ -1420,7 +1428,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::CallAccept);
 
-        let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+        let X25Packet::CallAccept(call_accept) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(call_accept.modulo, X25Modulo::Normal);
         assert_eq!(call_accept.channel, 1);
@@ -1445,7 +1455,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::CallAccept);
 
-        let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+        let X25Packet::CallAccept(call_accept) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(call_accept.modulo, X25Modulo::Normal);
         assert_eq!(call_accept.channel, 1);
@@ -1479,7 +1491,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::CallAccept);
 
-        let X25Packet::CallAccept(call_accept) = packet else { unreachable!() };
+        let X25Packet::CallAccept(call_accept) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(call_accept.modulo, X25Modulo::Normal);
         assert_eq!(call_accept.channel, 1);
@@ -1613,7 +1627,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ClearRequest);
 
-        let X25Packet::ClearRequest(clear_request) = packet else { unreachable!() };
+        let X25Packet::ClearRequest(clear_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(clear_request.modulo, X25Modulo::Normal);
         assert_eq!(clear_request.channel, 1);
@@ -1637,7 +1653,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ClearRequest);
 
-        let X25Packet::ClearRequest(clear_request) = packet else { unreachable!() };
+        let X25Packet::ClearRequest(clear_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(clear_request.modulo, X25Modulo::Normal);
         assert_eq!(clear_request.channel, 1);
@@ -1661,7 +1679,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ClearRequest);
 
-        let X25Packet::ClearRequest(clear_request) = packet else { unreachable!() };
+        let X25Packet::ClearRequest(clear_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(clear_request.modulo, X25Modulo::Normal);
         assert_eq!(clear_request.channel, 1);
@@ -1694,7 +1714,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ClearRequest);
 
-        let X25Packet::ClearRequest(clear_request) = packet else { unreachable!() };
+        let X25Packet::ClearRequest(clear_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(clear_request.modulo, X25Modulo::Normal);
         assert_eq!(clear_request.channel, 1);
@@ -1730,7 +1752,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ClearRequest);
 
-        let X25Packet::ClearRequest(clear_request) = packet else { unreachable!() };
+        let X25Packet::ClearRequest(clear_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(clear_request.modulo, X25Modulo::Normal);
         assert_eq!(clear_request.channel, 1);
@@ -1814,7 +1838,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ClearConfirm);
 
-        let X25Packet::ClearConfirm(clear_confirm) = packet else { unreachable!() };
+        let X25Packet::ClearConfirm(clear_confirm) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(clear_confirm.modulo, X25Modulo::Normal);
         assert_eq!(clear_confirm.channel, 1);
@@ -1835,7 +1861,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ClearConfirm);
 
-        let X25Packet::ClearConfirm(clear_confirm) = packet else { unreachable!() };
+        let X25Packet::ClearConfirm(clear_confirm) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(clear_confirm.modulo, X25Modulo::Normal);
         assert_eq!(clear_confirm.channel, 1);
@@ -1865,7 +1893,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ClearConfirm);
 
-        let X25Packet::ClearConfirm(clear_confirm) = packet else { unreachable!() };
+        let X25Packet::ClearConfirm(clear_confirm) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(clear_confirm.modulo, X25Modulo::Normal);
         assert_eq!(clear_confirm.channel, 1);
@@ -1978,7 +2008,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::Data);
 
-        let X25Packet::Data(data) = packet else { unreachable!() };
+        let X25Packet::Data(data) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(data.modulo, X25Modulo::Normal);
         assert_eq!(data.channel, 1);
@@ -2002,7 +2034,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::Data);
 
-        let X25Packet::Data(data) = packet else { unreachable!() };
+        let X25Packet::Data(data) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(data.modulo, X25Modulo::Normal);
         assert_eq!(data.channel, 1);
@@ -2026,7 +2060,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::Data);
 
-        let X25Packet::Data(data) = packet else { unreachable!() };
+        let X25Packet::Data(data) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(data.modulo, X25Modulo::Extended);
         assert_eq!(data.channel, 1);
@@ -2050,7 +2086,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::Data);
 
-        let X25Packet::Data(data) = packet else { unreachable!() };
+        let X25Packet::Data(data) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(data.modulo, X25Modulo::Extended);
         assert_eq!(data.channel, 1);
@@ -2104,7 +2142,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ReceiveReady);
 
-        let X25Packet::ReceiveReady(receive_ready) = packet else { unreachable!() };
+        let X25Packet::ReceiveReady(receive_ready) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(receive_ready.modulo, X25Modulo::Normal);
         assert_eq!(receive_ready.channel, 1);
@@ -2123,7 +2163,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ReceiveReady);
 
-        let X25Packet::ReceiveReady(receive_ready) = packet else { unreachable!() };
+        let X25Packet::ReceiveReady(receive_ready) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(receive_ready.modulo, X25Modulo::Extended);
         assert_eq!(receive_ready.channel, 1);
@@ -2172,7 +2214,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ReceiveNotReady);
 
-        let X25Packet::ReceiveNotReady(receive_not_ready) = packet else { unreachable!() };
+        let X25Packet::ReceiveNotReady(receive_not_ready) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(receive_not_ready.modulo, X25Modulo::Normal);
         assert_eq!(receive_not_ready.channel, 1);
@@ -2192,7 +2236,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ReceiveNotReady);
 
-        let X25Packet::ReceiveNotReady(receive_not_ready) = packet else { unreachable!() };
+        let X25Packet::ReceiveNotReady(receive_not_ready) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(receive_not_ready.modulo, X25Modulo::Extended);
         assert_eq!(receive_not_ready.channel, 1);
@@ -2243,7 +2289,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ResetRequest);
 
-        let X25Packet::ResetRequest(reset_request) = packet else { unreachable!() };
+        let X25Packet::ResetRequest(reset_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(reset_request.modulo, X25Modulo::Normal);
         assert_eq!(reset_request.channel, 1);
@@ -2263,7 +2311,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ResetRequest);
 
-        let X25Packet::ResetRequest(reset_request) = packet else { unreachable!() };
+        let X25Packet::ResetRequest(reset_request) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(reset_request.modulo, X25Modulo::Normal);
         assert_eq!(reset_request.channel, 1);
@@ -2297,7 +2347,9 @@ mod tests {
 
         assert_eq!(packet.packet_type(), X25PacketType::ResetConfirm);
 
-        let X25Packet::ResetConfirm(reset_confirm) = packet else { unreachable!() };
+        let X25Packet::ResetConfirm(reset_confirm) = packet else {
+            unreachable!()
+        };
 
         assert_eq!(reset_confirm.modulo, X25Modulo::Normal);
         assert_eq!(reset_confirm.channel, 1);

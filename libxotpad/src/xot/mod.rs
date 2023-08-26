@@ -23,7 +23,10 @@ pub const TCP_PORT: u16 = 1998;
 pub fn connect(addr: &X121Addr, resolver: &XotResolver) -> io::Result<XotLink> {
     let Some(xot_gateway) = resolver.lookup(addr) else {
         // TODO: HostUnreachable...
-        return Err(io::Error::new(io::ErrorKind::Other, "no XOT gateway found".to_owned()));
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "no XOT gateway found".to_owned(),
+        ));
     };
 
     let tcp_stream = TcpStream::connect((xot_gateway, TCP_PORT))?;
