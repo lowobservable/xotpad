@@ -6,8 +6,10 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
+
       - name: Install minimal toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -15,6 +17,7 @@ jobs:
           toolchain: stable
           override: true
           components: clippy, rustfmt
+
       - uses: actions/cache@v3
         with:
           path: |
@@ -24,25 +27,31 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Check
         run: cargo check
+
       - name: Clippy
         run: cargo clippy
+
       - name: Format
         run: cargo fmt --check
 
   test:
-    needs: check
     name: Test
+    needs: check
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
+
       - name: Install minimal toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           override: true
+
       - uses: actions/cache@v3
         with:
           path: |
@@ -52,23 +61,28 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Unit tests
         run: cargo test --workspace
 
   fuzz:
-    needs: check
     name: Fuzz
+    needs: check
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v3
+
       - name: Install minimal nightly toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: nightly
           override: true
+
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
+
       - uses: actions/cache@v3
         with:
           path: |
@@ -78,6 +92,7 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Fuzz
         run: |
           for target in $(cargo fuzz list); do
@@ -85,26 +100,26 @@ jobs:
           done
 
   build:
-    needs: [test, fuzz]
     name: Build ${{ matrix.target }}
+    needs: [test, fuzz]
     runs-on: ${{ matrix.os }}
+
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            suffix: ""
           - os: macos-latest
             target: x86_64-apple-darwin
-            suffix: ""
           - os: macos-latest
             target: aarch64-apple-darwin
-            suffix: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             suffix: .exe
+
     steps:
       - uses: actions/checkout@v3
+
       - name: Install minimal toolchain
         uses: actions-rs/toolchain@v1
         with:
@@ -112,14 +127,17 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
           override: true
+
       - name: Build
         run: cargo build --release --target "${{ matrix.target }}"
+
       - name: Package
         run: |
           mkdir dist
           cp "target/${{ matrix.target }}/release/xotpad${{ matrix.suffix }}" dist
           cp README.md dist
           cp LICENSE dist
+
       - name: Upload
         uses: actions/upload-artifact@v3
         with:
