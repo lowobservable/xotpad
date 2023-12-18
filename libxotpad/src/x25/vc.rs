@@ -935,6 +935,10 @@ impl VcInner {
             count += 1;
         }
 
+        if count > 0 {
+            self.send_data_queue.1.notify_all();
+        }
+
         (count, queue.len())
     }
 
