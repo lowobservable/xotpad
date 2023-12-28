@@ -773,7 +773,7 @@ impl VcInner {
                         }
                     }
                     VcState::Cleared(_, _) | VcState::OutOfOrder => {
-                        panic!("unexpected state")
+                        // Ignore packet, we'll exit the loop below.
                     }
                 }
 
