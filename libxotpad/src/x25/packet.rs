@@ -124,11 +124,11 @@ impl X25Packet {
     /// Decodes an `X25Packet` from the buffer provided.
     pub fn decode(buf: Bytes) -> Result<Self, String> {
         if buf.len() < MIN_PACKET_LEN {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > MAX_PACKET_LEN {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         let (modulo, gfi, channel, type_) = decode_packet_header(&buf)?;
@@ -170,7 +170,7 @@ impl X25Packet {
 
             Ok(X25Packet::ResetConfirm(reset_confirm))
         } else {
-            Err("unsupported packet type".into())
+            Err(format!("unsupported packet type: {type_}"))
         }
     }
 }
@@ -201,7 +201,7 @@ impl X25CallRequest {
         }
 
         if len > 259 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {len}"));
         }
 
         Ok(len)
@@ -217,11 +217,11 @@ impl X25CallRequest {
         assert_eq!(type_, 0x0b);
 
         if buf.len() < 5 {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > 259 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         buf.advance(3);
@@ -287,7 +287,7 @@ impl X25CallAccept {
         }
 
         if len > 259 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {len}"));
         }
 
         Ok(len)
@@ -303,11 +303,11 @@ impl X25CallAccept {
         assert_eq!(type_, 0x0f);
 
         if buf.len() < 3 {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > 259 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         buf.advance(3);
@@ -393,7 +393,7 @@ impl X25ClearRequest {
         }
 
         if len > 259 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {len}"));
         }
 
         Ok(len)
@@ -409,15 +409,15 @@ impl X25ClearRequest {
         assert_eq!(type_, 0x13);
 
         if buf.len() < 4 {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > 259 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         if (gfi & 0x04) != 0x00 {
-            return Err("invalid general format identifier".into());
+            return Err(format!("invalid GFI: {gfi}"));
         }
 
         buf.advance(3);
@@ -492,7 +492,7 @@ impl X25ClearConfirm {
         }
 
         if len > 259 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {len}"));
         }
 
         Ok(len)
@@ -508,15 +508,15 @@ impl X25ClearConfirm {
         assert_eq!(type_, 0x17);
 
         if buf.len() < 3 {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > 259 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         if (gfi & 0x04) != 0x00 {
-            return Err("invalid general format identifier".into());
+            return Err(format!("invalid GFI: {gfi}"));
         }
 
         buf.advance(3);
@@ -573,11 +573,11 @@ impl X25Data {
 
     fn encode_normal(&self, buf: &mut BytesMut) -> Result<usize, String> {
         if self.send_seq > 7 {
-            return Err("send sequence out of range".into());
+            return Err(format!("send sequence out of range: {}", self.send_seq));
         }
 
         if self.recv_seq > 7 {
-            return Err("receive sequence out of range".into());
+            return Err(format!("receive sequence out of range: {}", self.recv_seq));
         }
 
         let mut len = 0;
@@ -595,11 +595,11 @@ impl X25Data {
 
     fn encode_extended(&self, buf: &mut BytesMut) -> Result<usize, String> {
         if self.send_seq > 127 {
-            return Err("send sequence out of range".into());
+            return Err(format!("send sequence out of range: {}", self.send_seq));
         }
 
         if self.recv_seq > 127 {
-            return Err("receive sequence out of range".into());
+            return Err(format!("receive sequence out of range: {}", self.recv_seq));
         }
 
         let mut len = 0;
@@ -635,7 +635,7 @@ impl X25Data {
 
     fn decode_normal(mut buf: Bytes, gfi: u8, channel: u16) -> Result<Self, String> {
         if buf.len() < 3 {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         let qualifier = (gfi & 0x08) >> 3 == 1;
@@ -660,7 +660,7 @@ impl X25Data {
 
     fn decode_extended(mut buf: Bytes, gfi: u8, channel: u16) -> Result<Self, String> {
         if buf.len() < 4 {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         let qualifier = (gfi & 0x08) >> 3 == 1;
@@ -709,7 +709,7 @@ impl X25ReceiveReady {
 
     fn encode_normal(&self, buf: &mut BytesMut) -> Result<usize, String> {
         if self.recv_seq > 7 {
-            return Err("receive sequence out of range".into());
+            return Err(format!("receive sequence out of range: {}", self.recv_seq));
         }
 
         let mut len = 0;
@@ -723,7 +723,7 @@ impl X25ReceiveReady {
 
     fn encode_extended(&self, buf: &mut BytesMut) -> Result<usize, String> {
         if self.recv_seq > 127 {
-            return Err("receive sequence out of range".into());
+            return Err(format!("receive sequence out of range: {}", self.recv_seq));
         }
 
         let mut len = 0;
@@ -752,15 +752,15 @@ impl X25ReceiveReady {
         };
 
         if buf.len() < expected_len {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > expected_len {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         if (gfi & 0x0c) != 0x00 {
-            return Err("invalid general format identifier".into());
+            return Err(format!("invalid GFI: {gfi}"));
         }
 
         if modulo == X25Modulo::Extended && (type_ != 0x01 || (buf[3] & 0x01) != 0x00) {
@@ -805,7 +805,7 @@ impl X25ReceiveNotReady {
 
     fn encode_normal(&self, buf: &mut BytesMut) -> Result<usize, String> {
         if self.recv_seq > 7 {
-            return Err("receive sequence out of range".into());
+            return Err(format!("receive sequence out of range: {}", self.recv_seq));
         }
 
         let mut len = 0;
@@ -819,7 +819,7 @@ impl X25ReceiveNotReady {
 
     fn encode_extended(&self, buf: &mut BytesMut) -> Result<usize, String> {
         if self.recv_seq > 127 {
-            return Err("receive sequence out of range".into());
+            return Err(format!("receive sequence out of range: {}", self.recv_seq));
         }
 
         let mut len = 0;
@@ -848,15 +848,15 @@ impl X25ReceiveNotReady {
         };
 
         if buf.len() < expected_len {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > expected_len {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         if (gfi & 0x0c) != 0x00 {
-            return Err("invalid general format identifier".into());
+            return Err(format!("invalid GFI: {gfi}"));
         }
 
         if modulo == X25Modulo::Extended && (type_ != 0x05 || (buf[3] & 0x01) != 0x00) {
@@ -919,15 +919,15 @@ impl X25ResetRequest {
         assert_eq!(type_, 0x1b);
 
         if buf.len() < 4 {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > 5 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         if (gfi & 0x0c) != 0x00 {
-            return Err("invalid general format identifier".into());
+            return Err(format!("invalid GFI: {gfi}"));
         }
 
         buf.advance(3);
@@ -975,15 +975,15 @@ impl X25ResetConfirm {
         assert_eq!(type_, 0x1f);
 
         if buf.len() < 3 {
-            return Err("packet too short".into());
+            return Err(format!("packet too short: {}", buf.len()));
         }
 
         if buf.len() > 3 {
-            return Err("packet too long".into());
+            return Err(format!("packet too long: {}", buf.len()));
         }
 
         if (gfi & 0x0c) != 0x00 {
-            return Err("invalid general format identifier".into());
+            return Err(format!("invalid GFI: {gfi}"));
         }
 
         Ok(X25ResetConfirm { modulo, channel })
@@ -1003,7 +1003,7 @@ fn encode_packet_header(
     buf: &mut BytesMut,
 ) -> Result<usize, String> {
     if channel > MAX_CHANNEL {
-        return Err("channel out of range".into());
+        return Err(format!("channel out of range: {channel}"));
     }
 
     let gfi: u8 = match modulo {
@@ -1020,7 +1020,7 @@ fn encode_packet_header(
 
 fn decode_packet_header(buf: &Bytes) -> Result<(X25Modulo, u8, u16, u8), String> {
     if buf.len() < 3 {
-        return Err("packet too short".into());
+        return Err(format!("packet too short: {}", buf.len()));
     }
 
     let gfi = (buf[0] & 0xf0) >> 4;
@@ -1059,7 +1059,7 @@ fn encode_addr_block(called: &X121Addr, calling: &X121Addr, buf: &mut BytesMut) 
 fn decode_addr_block(buf: &mut Bytes) -> Result<(X121Addr, X121Addr), String> {
     #[allow(clippy::len_zero)]
     if buf.len() < 1 {
-        return Err("addr block too short".into());
+        return Err(format!("addr block too short: {}", buf.len()));
     }
 
     let len = buf.get_u8();
@@ -1072,7 +1072,7 @@ fn decode_addr_block(buf: &mut Bytes) -> Result<(X121Addr, X121Addr), String> {
     let len = (len / 2) + (len % 2);
 
     if buf.len() < len {
-        return Err("addr block too short".into());
+        return Err(format!("addr block incomplete: {}", buf.len()));
     }
 
     let addr_buf = buf.split_to(len);
@@ -1099,7 +1099,7 @@ fn encode_facilities_block(
     let len = encode_facilities(facilities, &mut facilities_buf)?;
 
     if len > 255 {
-        return Err("facilities too long".into());
+        return Err(format!("facilities too long: {len}"));
     }
 
     buf.put_u8(u8::try_from(len).unwrap());
@@ -1111,13 +1111,13 @@ fn encode_facilities_block(
 fn decode_facilities_block(buf: &mut Bytes) -> Result<Vec<X25Facility>, String> {
     #[allow(clippy::len_zero)]
     if buf.len() < 1 {
-        return Err("facilities block too short".into());
+        return Err(format!("facilities block too short: {}", buf.len()));
     }
 
     let len = buf.get_u8() as usize;
 
     if buf.len() < len {
-        return Err("facilities block too short".into());
+        return Err(format!("facilities block incomplete: {}", buf.len()));
     }
 
     let facilities_buf = buf.split_to(len);

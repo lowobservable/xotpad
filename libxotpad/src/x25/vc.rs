@@ -568,11 +568,13 @@ impl VcInner {
             };
 
             // Decode the packet.
+            let temp_packet = packet.clone(); // TODO: temporary logging
             let packet = match packet.map(X25Packet::decode).transpose() {
                 Ok(packet) => packet,
                 Err(err) => {
                     dbg!(err);
-                    todo!();
+                    dbg!(temp_packet);
+                    todo!("handle packet decode error");
                 }
             };
 
@@ -585,197 +587,7 @@ impl VcInner {
             {
                 let mut state = self.state.0.lock().unwrap();
 
-                match *state {
-                    VcState::Ready => {
-                        if let Some(X25Packet::CallRequest(call_request)) = packet {
-                            let mut params = self.params.write().unwrap();
-
-                            *params = negotiate_called_params(&call_request, &params);
-
-                            self.change_state(&mut state, VcState::Called(call_request));
-                        }
-                    }
-                    VcState::Called(_) => {
-                        match packet {
-                            Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.cleared(
-                                    &mut state,
-                                    ClearInitiator::Remote(clear_request),
-                                    None,
-                                );
-                            }
-                            _ => { /* TODO: ignore? */ }
-                        }
-                    }
-                    VcState::WaitCallAccept(start_time) => {
-                        let elapsed = start_time.elapsed();
-                        let X25Params { t21, t23, .. } = *self.params.read().unwrap();
-
-                        timeout = t21; // TODO: <- backup
-
-                        match packet {
-                            Some(X25Packet::CallAccept(call_accept)) => {
-                                {
-                                    let mut params = self.params.write().unwrap();
-
-                                    *params = negotiate_calling_params(&call_accept, &params);
-                                }
-
-                                self.data_transfer(&mut state);
-                            }
-                            Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.cleared(
-                                    &mut state,
-                                    ClearInitiator::Remote(clear_request),
-                                    None,
-                                );
-                            }
-                            Some(_) => { /* TODO: Ignore? */ }
-                            None if elapsed > t21 => {
-                                println!("T21 timeout, sending clear request...");
-
-                                self.clear_request(
-                                    &mut state,
-                                    19, // Local procedure error
-                                    49, // Time expired for incoming call
-                                    ClearInitiator::TimeOut(21),
-                                );
-
-                                timeout = t23;
-                            }
-                            None => timeout = t21 - elapsed,
-                        }
-                    }
-                    VcState::DataTransfer(ref mut data_transfer_state) => {
-                        match packet {
-                            Some(X25Packet::Data(data)) => 'packet: {
-                                if !data_transfer_state.update_recv_seq(data.send_seq) {
-                                    self.reset_request(
-                                        &mut state, 5, // Local procedure error
-                                        1, // Invalid send sequence
-                                    );
-
-                                    break 'packet;
-                                }
-
-                                if !data_transfer_state.update_send_window(data.recv_seq) {
-                                    self.reset_request(
-                                        &mut state, 5, // Local procedure error
-                                        2, // Invalid receive sequence
-                                    );
-
-                                    break 'packet;
-                                }
-
-                                // TODO: check for validation errors...
-                                self.queue_recv_data(data);
-
-                                let (sent_count, _) = self.send_queued_data(&mut state);
-
-                                if !matches!(*state, VcState::DataTransfer(_)) {
-                                    break 'packet;
-                                }
-
-                                // TODO: clean all of this up and work out if
-                                // sometimes, we should hold off...
-                                let is_local_ready = true;
-
-                                if sent_count == 0 && is_local_ready {
-                                    self.receive_ready(&mut state);
-                                }
-                            }
-                            Some(X25Packet::ReceiveReady(receive_ready)) => 'packet: {
-                                if !data_transfer_state.update_send_window(receive_ready.recv_seq) {
-                                    self.reset_request(
-                                        &mut state, 5, // Local procedure error
-                                        2, // Invalid receive sequence
-                                    );
-
-                                    break 'packet;
-                                }
-
-                                self.send_queued_data(&mut state);
-                            }
-                            Some(X25Packet::ResetRequest(_)) => {
-                                self.reset_confirm(&mut state);
-                            }
-                            Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.clear_confirm(&mut state, clear_request);
-                                self.recv_data_queue.1.notify_all();
-                            }
-                            Some(_) => { /* TODO: Ignore? */ }
-                            None => {}
-                        }
-                    }
-                    VcState::WaitResetConfirm(start_time) => {
-                        let elapsed = start_time.elapsed();
-                        let X25Params { t22, t23, .. } = *self.params.read().unwrap();
-
-                        timeout = t22; // TODO: backup!
-
-                        match packet {
-                            Some(X25Packet::ResetConfirm(_)) => {
-                                self.data_transfer(&mut state);
-                            }
-                            Some(X25Packet::ResetRequest(_)) => {
-                                self.reset_confirm(&mut state);
-                            }
-                            Some(X25Packet::ClearRequest(clear_request)) => {
-                                self.clear_confirm(&mut state, clear_request);
-                                self.recv_data_queue.1.notify_all();
-                            }
-                            None if elapsed > t22 => {
-                                println!("T22 timeout, sending clear request...");
-
-                                self.clear_request(
-                                    &mut state,
-                                    19, // Local procedure error
-                                    51, // Time expired for reset request
-                                    ClearInitiator::TimeOut(22),
-                                );
-
-                                timeout = t23;
-                            }
-                            None => timeout = t22 - elapsed,
-                            Some(_) => { /* TODO: Ignore? Or, do you think I need to send a reset request again!!! */
-                            }
-                        }
-                    }
-                    VcState::WaitClearConfirm(start_time, ref initiator) => {
-                        let elapsed = start_time.elapsed();
-                        let t23 = self.params.read().unwrap().t23;
-
-                        timeout = t23;
-
-                        match packet {
-                            Some(X25Packet::ClearConfirm(clear_confirm)) => {
-                                let initiator = initiator.clone();
-
-                                self.cleared(&mut state, initiator, Some(clear_confirm));
-                            }
-                            Some(X25Packet::ClearRequest(_)) => todo!(),
-                            Some(_) => { /* TODO: Ignore? */ }
-                            None if elapsed > t23 => {
-                                println!("T23 timeout");
-
-                                // TODO:
-                                // For a timeout on a "call request timeout" that leads to a clear
-                                // request Cisco sends "time expired for clear indication" twice (2
-                                // retries of THIS state).
-                                //
-                                // what does it do for a user initiated clear?
-                                let err = io::Error::from(io::ErrorKind::TimedOut);
-
-                                self.out_of_order(&mut state, err);
-                                break;
-                            }
-                            None => timeout = t23 - elapsed,
-                        }
-                    }
-                    VcState::Cleared(_, _) | VcState::OutOfOrder => {
-                        // Ignore packet, we'll exit the loop below.
-                    }
-                }
+                self.handle_in_packet(packet, &mut state, &mut timeout);
 
                 // Exit loop if we are in a terminal state.
                 if matches!(*state, VcState::Cleared(_, _) | VcState::OutOfOrder) {
@@ -787,6 +599,196 @@ impl VcInner {
             // receive a wakeup call.
             if recv_queue.is_empty() {
                 (recv_queue, _) = self.engine_wait.wait_timeout(recv_queue, timeout).unwrap();
+            }
+        }
+    }
+
+    fn handle_in_packet(
+        &self,
+        packet: Option<X25Packet>,
+        state: &mut VcState,
+        timeout: &mut Duration,
+    ) {
+        match *state {
+            VcState::Ready => {
+                if let Some(X25Packet::CallRequest(call_request)) = packet {
+                    let mut params = self.params.write().unwrap();
+
+                    *params = negotiate_called_params(&call_request, &params);
+
+                    self.change_state(state, VcState::Called(call_request));
+                }
+            }
+            VcState::Called(_) => {
+                match packet {
+                    Some(X25Packet::ClearRequest(clear_request)) => {
+                        self.cleared(state, ClearInitiator::Remote(clear_request), None);
+                    }
+                    _ => { /* TODO: ignore? */ }
+                }
+            }
+            VcState::WaitCallAccept(start_time) => {
+                let elapsed = start_time.elapsed();
+                let X25Params { t21, t23, .. } = *self.params.read().unwrap();
+
+                *timeout = t21; // TODO: <- backup
+
+                match packet {
+                    Some(X25Packet::CallAccept(call_accept)) => {
+                        {
+                            let mut params = self.params.write().unwrap();
+
+                            *params = negotiate_calling_params(&call_accept, &params);
+                        }
+
+                        self.data_transfer(state);
+                    }
+                    Some(X25Packet::ClearRequest(clear_request)) => {
+                        self.cleared(state, ClearInitiator::Remote(clear_request), None);
+                    }
+                    Some(_) => { /* TODO: Ignore? */ }
+                    None if elapsed > t21 => {
+                        println!("T21 timeout, sending clear request...");
+
+                        self.clear_request(
+                            state,
+                            19, // Local procedure error
+                            49, // Time expired for incoming call
+                            ClearInitiator::TimeOut(21),
+                        );
+
+                        *timeout = t23;
+                    }
+                    None => *timeout = t21 - elapsed,
+                }
+            }
+            VcState::DataTransfer(ref mut data_transfer_state) => {
+                match packet {
+                    Some(X25Packet::Data(data)) => 'packet: {
+                        if !data_transfer_state.update_recv_seq(data.send_seq) {
+                            self.reset_request(
+                                state, 5, // Local procedure error
+                                1, // Invalid send sequence
+                            );
+
+                            break 'packet;
+                        }
+
+                        if !data_transfer_state.update_send_window(data.recv_seq) {
+                            self.reset_request(
+                                state, 5, // Local procedure error
+                                2, // Invalid receive sequence
+                            );
+
+                            break 'packet;
+                        }
+
+                        // TODO: check for validation errors...
+                        self.queue_recv_data(data);
+
+                        let (sent_count, _) = self.send_queued_data(state);
+
+                        if !matches!(*state, VcState::DataTransfer(_)) {
+                            break 'packet;
+                        }
+
+                        // TODO: clean all of this up and work out if
+                        // sometimes, we should hold off...
+                        let is_local_ready = true;
+
+                        if sent_count == 0 && is_local_ready {
+                            self.receive_ready(state);
+                        }
+                    }
+                    Some(X25Packet::ReceiveReady(receive_ready)) => 'packet: {
+                        if !data_transfer_state.update_send_window(receive_ready.recv_seq) {
+                            self.reset_request(
+                                state, 5, // Local procedure error
+                                2, // Invalid receive sequence
+                            );
+
+                            break 'packet;
+                        }
+
+                        self.send_queued_data(state);
+                    }
+                    Some(X25Packet::ResetRequest(_)) => {
+                        self.reset_confirm(state);
+                    }
+                    Some(X25Packet::ClearRequest(clear_request)) => {
+                        self.clear_confirm(state, clear_request);
+                        self.recv_data_queue.1.notify_all();
+                    }
+                    Some(_) => { /* TODO: Ignore? */ }
+                    None => {}
+                }
+            }
+            VcState::WaitResetConfirm(start_time) => {
+                let elapsed = start_time.elapsed();
+                let X25Params { t22, t23, .. } = *self.params.read().unwrap();
+
+                *timeout = t22; // TODO: backup!
+
+                match packet {
+                    Some(X25Packet::ResetConfirm(_)) => {
+                        self.data_transfer(state);
+                    }
+                    Some(X25Packet::ResetRequest(_)) => {
+                        self.reset_confirm(state);
+                    }
+                    Some(X25Packet::ClearRequest(clear_request)) => {
+                        self.clear_confirm(state, clear_request);
+                        self.recv_data_queue.1.notify_all();
+                    }
+                    None if elapsed > t22 => {
+                        println!("T22 timeout, sending clear request...");
+
+                        self.clear_request(
+                            state,
+                            19, // Local procedure error
+                            51, // Time expired for reset request
+                            ClearInitiator::TimeOut(22),
+                        );
+
+                        *timeout = t23;
+                    }
+                    None => *timeout = t22 - elapsed,
+                    Some(_) => { /* TODO: Ignore? Or, do you think I need to send a reset request again!!! */
+                    }
+                }
+            }
+            VcState::WaitClearConfirm(start_time, ref initiator) => {
+                let elapsed = start_time.elapsed();
+                let t23 = self.params.read().unwrap().t23;
+
+                *timeout = t23;
+
+                match packet {
+                    Some(X25Packet::ClearConfirm(clear_confirm)) => {
+                        let initiator = initiator.clone();
+
+                        self.cleared(state, initiator, Some(clear_confirm));
+                    }
+                    Some(X25Packet::ClearRequest(_)) => todo!(),
+                    Some(_) => { /* TODO: Ignore? */ }
+                    None if elapsed > t23 => {
+                        println!("T23 timeout");
+
+                        // TODO:
+                        // For a timeout on a "call request timeout" that leads to a clear
+                        // request Cisco sends "time expired for clear indication" twice (2
+                        // retries of THIS state).
+                        //
+                        // what does it do for a user initiated clear?
+                        let err = io::Error::from(io::ErrorKind::TimedOut);
+
+                        self.out_of_order(state, err);
+                    }
+                    None => *timeout = t23 - elapsed,
+                }
+            }
+            VcState::Cleared(_, _) | VcState::OutOfOrder => {
+                // Ignore packet, we'll exit the loop below.
             }
         }
     }

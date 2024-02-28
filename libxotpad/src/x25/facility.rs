@@ -83,11 +83,11 @@ pub fn encode_facilities(facilities: &[X25Facility], buf: &mut BytesMut) -> Resu
                 // This does not account for the window size limit based on modulo,
                 // that validation should be performed in the virtual circuit layer.
                 if !(1..=127).contains(from_called) {
-                    return Err("invalid window size".into());
+                    return Err(format!("invalid window size: {from_called}"));
                 }
 
                 if !(1..=127).contains(from_calling) {
-                    return Err("invalid window size".into());
+                    return Err(format!("invalid window size: {from_calling}"));
                 }
 
                 encode_class_b_params((*from_called, *from_calling), buf)
@@ -153,11 +153,11 @@ pub fn decode_facilities(mut buf: Bytes) -> Result<Vec<X25Facility>, String> {
             // This does not account for the window size limit based on modulo,
             // that validation should be performed in the virtual circuit layer.
             if !(1..=127).contains(&from_called) {
-                return Err("invalid window size".into());
+                return Err(format!("invalid window size: {from_called}"));
             }
 
             if !(1..=127).contains(&from_calling) {
-                return Err("invalid window size".into());
+                return Err(format!("invalid window size: {from_calling}"));
             }
 
             X25Facility::WindowSize {
@@ -213,8 +213,9 @@ fn encode_class_a_params(params: (u8,), buf: &mut BytesMut) -> usize {
 }
 
 fn decode_class_a_params(buf: &mut Bytes) -> Result<(u8,), String> {
-    if buf.is_empty() {
-        return Err("facility too short".into());
+    #[allow(clippy::len_zero)]
+    if buf.len() < 1 {
+        return Err(format!("facility too short: {}", buf.len()));
     }
 
     Ok((buf.get_u8(),))
@@ -229,7 +230,7 @@ fn encode_class_b_params(params: (u8, u8), buf: &mut BytesMut) -> usize {
 
 fn decode_class_b_params(buf: &mut Bytes) -> Result<(u8, u8), String> {
     if buf.len() < 2 {
-        return Err("facility too short".into());
+        return Err(format!("facility too short: {}", buf.len()));
     }
 
     Ok((buf.get_u8(), buf.get_u8()))
@@ -245,7 +246,7 @@ fn encode_class_c_params(params: (u8, u8, u8), buf: &mut BytesMut) -> usize {
 
 fn decode_class_c_params(buf: &mut Bytes) -> Result<(u8, u8, u8), String> {
     if buf.len() < 3 {
-        return Err("facility too short".into());
+        return Err(format!("facility too short: {}", buf.len()));
     }
 
     Ok((buf.get_u8(), buf.get_u8(), buf.get_u8()))
@@ -253,7 +254,7 @@ fn decode_class_c_params(buf: &mut Bytes) -> Result<(u8, u8, u8), String> {
 
 fn encode_class_d_params(params: &Bytes, buf: &mut BytesMut) -> Result<usize, String> {
     if params.len() > 255 {
-        return Err("parameters too long".into());
+        return Err(format!("parameters too long: {}", buf.len()));
     }
 
     let len = 1 + params.len();
@@ -267,14 +268,15 @@ fn encode_class_d_params(params: &Bytes, buf: &mut BytesMut) -> Result<usize, St
 }
 
 fn decode_class_d_params(buf: &mut Bytes) -> Result<Bytes, String> {
-    if buf.is_empty() {
-        return Err("facility too short".into());
+    #[allow(clippy::len_zero)]
+    if buf.len() < 1 {
+        return Err(format!("facility too short: {}", buf.len()));
     }
 
     let len = buf.get_u8() as usize;
 
     if buf.len() < len {
-        return Err("facility too short".into());
+        return Err(format!("facility incomplete: {}", buf.len()));
     }
 
     Ok(buf.copy_to_bytes(len))
@@ -292,13 +294,13 @@ fn encode_packet_size(size: usize) -> Result<u8, String> {
         1024 => Ok(10),
         2048 => Ok(11),
         4096 => Ok(12),
-        _ => Err("invalid packet size".into()),
+        _ => Err(format!("invalid packet size: {size}")),
     }
 }
 
 fn decode_packet_size(size: u8) -> Result<usize, String> {
     if !(4..=12).contains(&size) {
-        return Err("invalid packet size".into());
+        return Err(format!("invalid packet size: {size}"));
     }
 
     Ok(usize::pow(2, u32::from(size)))

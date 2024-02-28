@@ -75,11 +75,11 @@ fn encode(x25_packet: &[u8], buf: &mut BytesMut) -> Result<usize, String> {
     let len = x25_packet.len();
 
     if len < x25::MIN_PACKET_LEN {
-        return Err("packet too short".into());
+        return Err(format!("packet too short: {len}"));
     }
 
     if len > x25::MAX_PACKET_LEN {
-        return Err("packet too long".into());
+        return Err(format!("packet too long: {len}"));
     }
 
     buf.reserve(XOT_HEADER_LEN + len);
@@ -103,7 +103,7 @@ pub(crate) fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
     let version = u16::from_be_bytes(version);
 
     if version != 0 {
-        return Err("unsupported version".into());
+        return Err(format!("unsupported version: {version}"));
     }
 
     let mut len = [0; 2];
@@ -113,11 +113,11 @@ pub(crate) fn decode(buf: &mut BytesMut) -> Result<Option<Bytes>, String> {
     let len = u16::from_be_bytes(len) as usize;
 
     if len < x25::MIN_PACKET_LEN {
-        return Err("packet too short".into());
+        return Err(format!("packet too short: {len}"));
     }
 
     if len > x25::MAX_PACKET_LEN {
-        return Err("packet too long".into());
+        return Err(format!("packet too long: {len}"));
     }
 
     if buf.len() < XOT_HEADER_LEN + len {

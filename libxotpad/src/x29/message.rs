@@ -31,7 +31,7 @@ impl X29PadMessage {
     pub fn decode(mut buf: Bytes) -> Result<Self, String> {
         #[allow(clippy::len_zero)]
         if buf.len() < 1 {
-            return Err("message too short".into());
+            return Err(format!("message too short: {}", buf.len()));
         }
 
         let code = buf.get_u8();
@@ -48,7 +48,7 @@ impl X29PadMessage {
                 let params = decode_params(buf)?;
 
                 if params.iter().any(|p| p.1 != 0) {
-                    return Err("invalid param".into());
+                    return Err("invalid param for read message".into());
                 }
 
                 let params = params.iter().map(|p| p.0 & 0x7f).collect();
@@ -65,12 +65,12 @@ impl X29PadMessage {
             0x01 => {
                 #[allow(clippy::len_zero)]
                 if buf.len() > 0 {
-                    return Err("message too long".into());
+                    return Err(format!("message too long: {}", buf.len()));
                 }
 
                 Ok(X29PadMessage::ClearInvitation)
             }
-            _ => Err("unrecognized X.29 PAD message".into()),
+            _ => Err(format!("unrecognized X.29 PAD message: {code}")),
         }
     }
 }
