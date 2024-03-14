@@ -148,7 +148,12 @@ impl Svc {
         Ok(svc)
     }
 
-    pub fn listen(link: XotLink, channel: u16, params: &X25Params) -> io::Result<SvcIncomingCall> {
+    pub fn listen_timeout(
+        link: XotLink,
+        channel: u16,
+        params: &X25Params,
+        duration: Duration,
+    ) -> io::Result<SvcIncomingCall> {
         let svc = Svc::new(link, channel, params);
 
         let call_request = {
@@ -156,8 +161,31 @@ impl Svc {
 
             let mut state = inner.state.0.lock().unwrap();
 
+            let mut remaining_duration = duration;
+
             while matches!(*state, VcState::Ready) {
-                state = inner.state.1.wait(state).unwrap();
+                let start = Instant::now();
+
+                let result = inner
+                    .state
+                    .1
+                    .wait_timeout(state, remaining_duration)
+                    .unwrap();
+
+                state = result.0;
+
+                if !matches!(*state, VcState::Ready) {
+                    break;
+                }
+
+                remaining_duration = remaining_duration.saturating_sub(start.elapsed());
+
+                if result.1.timed_out() || remaining_duration.is_zero() {
+                    // TODO: See note below about returning XotLink to the caller...
+                    let _ = inner.send_link.lock().unwrap().shutdown();
+
+                    return Err(io::Error::from(io::ErrorKind::TimedOut));
+                }
             }
 
             match *state {

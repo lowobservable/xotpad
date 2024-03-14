@@ -127,10 +127,11 @@ pub fn run(
 
                     let xot_link = XotLink::new(tcp_stream.unwrap());
 
-                    let incoming_call = Svc::listen(
+                    let incoming_call = Svc::listen_timeout(
                         xot_link,
                         1, /* this "channel" needs to be removed! */
                         &x25_params,
+                        Duration::from_secs(200),
                     );
 
                     if incoming_call.is_err() {
